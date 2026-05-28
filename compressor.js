@@ -1,351 +1,349 @@
-/**
- * CtxCrush — Compression Engine v4
- *
- * Borrowed from context-mode (github.com/mksglu/context-mode):
- *   - 13-category event classification with priority weights (1=critical…5=low)
- *   - XML session_resume snapshot format (structured sections per category)
- *   - Decisions, errors, intent, role, blocker, task detection
- *   - Filler pruning
- *
- * Adapted for browser / ChatGPT fetch interception:
- *   - Pure JS, no Node/SQLite/filesystem dependencies
- *   - Works on raw ChatGPT messages[] array (role + content)
- *   - Sliding window: recent N messages kept verbatim
- *   - Old messages → classified events → XML snapshot block
- */
-
 'use strict';
 
-// ─── Config ─────────────────────────────────────────────────────────────────
+require('dotenv').config();
+const express  = require('express');
+const cors     = require('cors');
+const fetch    = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+const { compressMessages, estimateTokens } = require('./compressor');
 
-const DEFAULT_CONFIG = {
-  enabled: true,
-  windowSize: 10,          // keep last N messages verbatim
-  minMessagesToCompress: 6,
-  pruneFillers: true,
-  maxEventsPerCategory: 12  // cap per section to keep XML compact
+const app  = express();
+const PORT = process.env.PORT || 3000;
+
+// ── Middleware ───────────────────────────────────────────────────────────────
+app.use(cors());
+app.use(express.json({ limit: '10mb' }));
+
+// ── Config from env (with sensible defaults) ─────────────────────────────────
+const CFG = {
+  windowSize:            parseInt(process.env.WINDOW_SIZE   || '10'),
+  minMessagesToCompress: parseInt(process.env.MIN_MESSAGES  || '6'),
+  pruneFillers:          process.env.PRUNE_FILLERS !== 'false',
+  maxEventsPerCategory:  parseInt(process.env.MAX_EVENTS    || '12'),
 };
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ── Simple in-memory stats ───────────────────────────────────────────────────
+const stats = {
+  requests: 0, compressed: 0, skipped: 0,
+  totalSaved: 0, totalBefore: 0
+};
 
-function estimateTokens(text) {
-  return Math.ceil((text || '').length / 4);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// HEALTH + STATS
+// ─────────────────────────────────────────────────────────────────────────────
 
-function extractText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content))
-    return content.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n').trim();
-  return String(content || '');
-}
-
-function escapeXML(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-// ─── Filler pruning (context-mode style) ────────────────────────────────────
-
-const FILLER_RX = [
-  /^(sure[,!.]?|certainly[,!.]?|of course[,!.]?|absolutely[,!.]?|great[,!.]?)\s+/i,
-  /^(i understand[,.]?|i see[,.]?|got it[,.]?|noted[,.]?)\s+/i,
-  /\bplease (let me know|feel free to ask)[^.!?\n]*[.!]?\s*$/gim,
-  /\b(hope this helps|hope that helps)[.!]?\s*$/gim,
-  /\bis there anything else[^.!?\n]*[.!]?\s*$/gim,
-  /\b(certainly|of course)[,!]?\s+/gi,
-  /^(thank you for (your|the) (question|message|context))[^.!\n]*[.!]?\s*/gim
-];
-
-function pruneFiller(text) {
-  let s = text;
-  for (const rx of FILLER_RX) s = s.replace(rx, '');
-  return s.trim();
-}
-
-// ─── Event Classification ────────────────────────────────────────────────────
-// Adapted from context-mode/src/session/extract.ts
-// Priority: 1=critical, 2=high, 3=medium, 4=low, 5=noise
-
-const QUESTION_MARK_RX   = /[?？؟¿]/u;
-const ALPHABETIC_RX      = /\p{L}/u;
-const CLAUSE_SEP_RX      = /[,;，；、،]/u;
-const TWO_TOKENS_RX      = /\p{L}+\s+\p{L}+/u;
-const LONG_RUN_RX        = /\p{L}{6,}/u;
-const BLOCKER_RX         = /(?:Error\s*:|Exception\s*:|Traceback\b|\bat\s+\S+\s*\([^)]*:\d+:\d+\))/u;
-const RESOLVED_MARK_RX   = /[✓✔✅☑🎉]/u;
-const RESOLVED_TEXT_RX   = /^\s*(?:fixed|resolved)\s*:/iu;
-const CODE_FENCE_RX      = /```[\s\S]*?```|`[^`]+`/;
-const DECISION_VERB_RX   = /\b(use|don't|avoid|switch|changed|decided|instead|chosen|picked|prefer|must|should|will not|won't|let's|we'll)\b/i;
-const URL_RX             = /https?:\/\/[^\s)>\]"']+/g;
-const TASK_SIGNAL_RX     = /\b(todo|task|ticket|issue|fix|implement|build|create|add|remove|refactor|update|deploy|test)\b/i;
-const ERROR_SIGNAL_RX    = /\b(error|bug|fail|broken|exception|crash|undefined|null|cannot|invalid|unexpected)\b/i;
-
-/**
- * Classify a single message into one or more typed events.
- * Returns array of { category, type, data, priority }
- */
-function classifyMessage(msg, index) {
-  const role    = msg.role; // 'user' | 'assistant' | 'system'
-  const raw     = extractText(msg.content);
-  const text    = raw.trim();
-  const events  = [];
-
-  if (!text) return events;
-
-  // ── Priority 1: errors ───────────────────────────────────────────
-  if (BLOCKER_RX.test(text)) {
-    if (RESOLVED_MARK_RX.test(text) || RESOLVED_TEXT_RX.test(text)) {
-      events.push({ category: 'error', type: 'error_resolved', data: text.slice(0, 300), priority: 1 });
-    } else {
-      events.push({ category: 'error', type: 'error', data: text.slice(0, 300), priority: 1 });
-    }
-  }
-
-  // ── Priority 1: code blocks ──────────────────────────────────────
-  const codeMatch = text.match(/```[\w]*\n?([\s\S]*?)```/);
-  if (codeMatch) {
-    const lang    = (text.match(/```(\w+)/) || [])[1] || 'code';
-    const snippet = codeMatch[1].trim().slice(0, 200);
-    events.push({ category: 'code', type: 'code_block', data: `[${lang}] ${snippet}`, priority: 1 });
-  }
-
-  // ── Priority 1: tasks / todos (user messages) ────────────────────
-  if (role === 'user' && TASK_SIGNAL_RX.test(text)) {
-    const first = text.split('\n')[0].slice(0, 200);
-    events.push({ category: 'task', type: 'task', data: first, priority: 1 });
-  }
-
-  // ── Priority 2: decisions ────────────────────────────────────────
-  if (DECISION_VERB_RX.test(text) && CLAUSE_SEP_RX.test(text)) {
-    const snippet = text.slice(0, 250);
-    events.push({ category: 'decision', type: 'decision', data: snippet, priority: 2 });
-  } else if (
-    role === 'user' &&
-    CLAUSE_SEP_RX.test(text) &&
-    ALPHABETIC_RX.test(text) &&
-    !QUESTION_MARK_RX.test(text) &&
-    [...text].length >= 15 &&
-    [...text].length <= 500
-  ) {
-    events.push({ category: 'decision', type: 'decision', data: text.slice(0, 250), priority: 2 });
-  }
-
-  // ── Priority 2: resolved marks ("fixed ✓", "resolved: ...") ────
-  if (!events.find(e => e.type === 'error_resolved') &&
-      (RESOLVED_MARK_RX.test(text) || RESOLVED_TEXT_RX.test(text))) {
-    const first = text.split('\n')[0].slice(0, 200);
-    events.push({ category: 'error', type: 'error_resolved', data: first, priority: 2 });
-  }
-
-  // ── Priority 2: errors in plain text ────────────────────────────
-  if (!events.find(e => e.category === 'error') && ERROR_SIGNAL_RX.test(text)) {
-    const first = text.split('\n').find(l => ERROR_SIGNAL_RX.test(l)) || text.slice(0, 200);
-    events.push({ category: 'error', type: 'error_mention', data: first.slice(0, 200), priority: 2 });
-  }
-
-  // ── Priority 2: URLs / external references ───────────────────────
-  const urls = (text.match(URL_RX) || []).slice(0, 3);
-  if (urls.length) {
-    events.push({ category: 'external', type: 'url', data: urls.join(', '), priority: 2 });
-  }
-
-  // ── Priority 3: role / persona (only explicit persona instructions) ──
-  if (role === 'user') {
-    const first = text.split(/[.!\n。！]/u)[0].trim();
-    const isPersona = /^(you are|act as|behave as|pretend|your role|as a)/i.test(first);
-    if (isPersona && [...first].length >= 8 && [...first].length <= 120) {
-      events.push({ category: 'role', type: 'role', data: first, priority: 3 });
-    }
-  }
-
-  // ── Priority 3: intent ────────────────────────────────────────────
-  if (role === 'user') {
-    if (QUESTION_MARK_RX.test(text)) {
-      events.push({ category: 'intent', type: 'intent', data: 'investigate', priority: 3 });
-    } else if ([...text].length < 60 && ALPHABETIC_RX.test(text)) {
-      events.push({ category: 'intent', type: 'intent', data: 'implement', priority: 3 });
-    }
-  }
-
-  // ── Priority 4: large data blobs ─────────────────────────────────
-  if (text.length > 1024) {
-    const preview = text.slice(0, 200).replace(/\n/g, ' ');
-    events.push({ category: 'data', type: 'large_data', data: `[${text.length} chars] ${preview}`, priority: 4 });
-  }
-
-  // ── Fallback: general summary ─────────────────────────────────────
-  // Always emit at least one event per message so the snapshot is complete
-  if (events.length === 0 || !events.find(e => e.priority <= 3)) {
-    const roleLabel = role === 'user' ? 'U' : 'A';
-    const firstLine = text.split('\n').find(l => l.trim()) || text;
-    const preview   = firstLine.length > 160 ? firstLine.slice(0, 160) + '…' : firstLine;
-    events.push({ category: 'summary', type: 'summary', data: `[${roleLabel}:${index}] ${preview}`, priority: 4 });
-  }
-
-  return events;
-}
-
-// ─── XML Snapshot Builder ────────────────────────────────────────────────────
-// Adapted from context-mode/src/session/snapshot.ts
-
-function buildSection(tag, events, maxItems) {
-  if (!events.length) return '';
-  const limited = events.slice(-maxItems);
-  const lines   = limited.map(e => `  <${e.type}>${escapeXML(e.data)}</${e.type}>`);
-  return [`<${tag}>`, ...lines, `</${tag}>`].join('\n');
-}
-
-function buildXMLSnapshot(oldMsgs, cfg) {
-  const MAX = cfg.maxEventsPerCategory;
-  
-
-  // Classify all old messages into events
-  const allEvents = [];
-  for (let i = 0; i < oldMsgs.length; i++) {
-    const events = classifyMessage(oldMsgs[i], i + 1);
-    allEvents.push(...events);
-  }
-
-  // Group by category, sorted by priority within each group
-  const byCategory = {};
-  for (const ev of allEvents) {
-    if (!byCategory[ev.category]) byCategory[ev.category] = [];
-    byCategory[ev.category].push(ev);
-  }
-
-  // Build sections in priority order (most important first)
-  const CATEGORY_ORDER = ['error', 'code', 'task', 'decision', 'external', 'role', 'data', 'summary'];
-  const sections = [];
-
-  // Compact header note
-  sections.push(`  <note>Compressed prior context. Recent messages follow verbatim.</note>`);
-
-  // Intent summary (last intent wins)
-  const intentEvents = byCategory['intent'] || [];
-  if (intentEvents.length) {
-    const last = intentEvents[intentEvents.length - 1];
-    sections.push(`  <intent mode="${escapeXML(last.data)}" detected_at="msg_${oldMsgs.length}"/>`);
-  }
-
-  // Build each category section
-  for (const cat of CATEGORY_ORDER) {
-    if (cat === 'intent') continue; // already handled
-    const evs = byCategory[cat];
-    if (!evs || !evs.length) continue;
-
-    // Deduplicate by data content
-    const seen = new Set();
-    const deduped = evs.filter(e => {
-      if (seen.has(e.data)) return false;
-      seen.add(e.data);
-      return true;
-    });
-
-    const section = buildSection(cat, deduped, MAX);
-    if (section) sections.push(section);
-  }
-
-  const msgCount  = oldMsgs.length;
-  const evCount   = allEvents.length;
-  const header    = `<ctx msgs="${msgCount}" events="${evCount}">`;
-  const footer    = `</ctx>`;
-  const body      = sections.join('\n\n');
-
-  return `${header}\n\n${body}\n\n${footer}`;
-}
-
-// ─── Main compress function ──────────────────────────────────────────────────
-
-function compressMessages(messages, config = {}) {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
-
-  if (!cfg.enabled) return { messages, stats: { skipped: true, reason: 'disabled' } };
-
-  const systemMsgs = messages.filter(m => m.role === 'system');
-  const convoMsgs  = messages.filter(m => m.role !== 'system');
-
-  if (convoMsgs.length < cfg.minMessagesToCompress)
-    return { messages, stats: { skipped: true, reason: `only ${convoMsgs.length} messages` } };
-
-  const tokensBefore = messages.reduce((s, m) => s + estimateTokens(extractText(m.content)), 0);
-
-  const windowSize = Math.min(cfg.windowSize, convoMsgs.length - 1);
-  const oldMsgs    = convoMsgs.slice(0, -windowSize);
-  const recentMsgs = convoMsgs.slice(-windowSize);
-
-  if (oldMsgs.length === 0)
-    return { messages, stats: { skipped: true, reason: 'nothing old enough to compress' } };
-
-  // Build XML snapshot from old messages
-  const snapshotXML = buildXMLSnapshot(oldMsgs, cfg);
-  const snapshotBlock = { role: 'system', content: snapshotXML };
-
-  // Measure: only use snapshot if it saves tokens
-  const oldTokens      = oldMsgs.reduce((s, m) => s + estimateTokens(extractText(m.content)), 0);
-  const snapshotTokens = estimateTokens(snapshotXML);
-
-  let compressedOld;
-  let compressionType;
-
-  if (snapshotTokens < oldTokens) {
-    compressedOld    = [snapshotBlock];
-    compressionType  = 'xml_snapshot';
-  } else {
-    // Snapshot not smaller — just prune fillers from old messages
-    compressedOld = oldMsgs.map(msg => {
-      if (!cfg.pruneFillers || msg.role !== 'assistant') return msg;
-      const raw    = extractText(msg.content);
-      const pruned = pruneFiller(raw);
-      return { ...msg, content: pruned || raw };
-    });
-    compressionType = 'filler_prune';
-  }
-
-  // Prune fillers from recent assistant messages (keep full length)
-  const finalRecent = recentMsgs.map(msg => {
-    if (!cfg.pruneFillers || msg.role !== 'assistant') return msg;
-    const raw    = extractText(msg.content);
-    const pruned = pruneFiller(raw);
-    return { ...msg, content: pruned || raw };
-  });
-
-  const compressed   = [...systemMsgs, ...compressedOld, ...finalRecent];
-  const tokensAfter  = compressed.reduce((s, m) => s + estimateTokens(extractText(m.content)), 0);
-  const tokensSaved  = Math.max(0, tokensBefore - tokensAfter);
-  const percentSaved = tokensBefore > 0 ? Math.round((tokensSaved / tokensBefore) * 100) : 0;
-
-  if (tokensSaved === 0)
-    return { messages, stats: { skipped: true, reason: 'no tokens saved' } };
-
-  return {
-    messages: compressed,
+app.get('/', (req, res) => {
+  res.json({
+    name:    'CtxCrush Proxy',
+    version: '1.0.0',
+    status:  'running',
+    config:  CFG,
     stats: {
-      skipped: false,
-      tokensBefore,
-      tokensAfter,
-      tokensSaved,
-      percentSaved,
-      originalMsgCount:   messages.length,
-      compressedMsgCount: compressed.length,
-      oldMsgsCompressed:  oldMsgs.length,
-      recentKept:         recentMsgs.length,
-      compressionType
+      ...stats,
+      avgSavedPct: stats.totalBefore > 0
+        ? Math.round((stats.totalSaved / stats.totalBefore) * 100) + '%'
+        : '0%'
+    },
+    endpoints: {
+      openai:    'POST /v1/chat/completions  →  forwards to api.openai.com',
+      anthropic: 'POST /v1/messages          →  forwards to api.anthropic.com'
     }
+  });
+});
+
+app.get('/stats', (req, res) => res.json(stats));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// /test — browser chat UI (served inline, no separate file needed)
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.get('/test', (req, res) => {
+  const proxyBase = req.protocol + '://' + req.get('host');
+  res.setHeader('Content-Type', 'text/html');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CtxCrush Live Tester</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#09090b;--bg2:#111113;--bg3:#1a1a1f;--border:#27272f;--accent:#7c6aff;--accent2:#a78bfa;--green:#34d399;--text:#f4f0ff;--muted:#6b6880;--dim:#3a3848}
+body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;min-height:100vh;display:grid;grid-template-columns:280px 1fr;grid-template-rows:56px 1fr;grid-template-areas:"header header" "sidebar main"}
+header{grid-area:header;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:12px}
+.logo{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:800;letter-spacing:-.5px}
+.logo-icon{width:28px;height:28px;background:var(--accent);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px}
+.logo span{color:var(--accent2)}
+.tag{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--muted);background:var(--bg3);border:1px solid var(--border);padding:3px 9px;border-radius:20px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--muted);margin-left:auto;transition:background .3s}
+.dot.on{background:var(--green);box-shadow:0 0 6px var(--green)}
+aside{grid-area:sidebar;background:var(--bg2);border-right:1px solid var(--border);padding:18px 14px;display:flex;flex-direction:column;gap:16px;overflow-y:auto}
+.slbl{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+label{font-size:11px;font-weight:600}
+input,select{background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:11px;padding:8px 10px;border-radius:7px;outline:none;width:100%;transition:border-color .15s}
+input:focus,select:focus{border-color:var(--accent)}
+.hint{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--muted);line-height:1.5}
+.btn{width:100%;padding:9px;background:var(--accent);color:#fff;font-family:'Syne',sans-serif;font-size:12px;font-weight:700;border:none;border-radius:8px;cursor:pointer;transition:opacity .15s;margin-bottom:6px}
+.btn:hover{opacity:.85}
+.btn.sec{background:var(--bg3);border:1px solid var(--border);color:var(--muted)}
+.btn.sec:hover{color:var(--text)}
+.sgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.sc{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 10px}
+.sc.w{grid-column:1/-1;border-color:rgba(124,106,255,.3);background:rgba(124,106,255,.06)}
+.sl{font-family:'IBM Plex Mono',monospace;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
+.sv{font-size:19px;font-weight:800;letter-spacing:-1px;line-height:1}
+.sv.g{color:var(--green)}.sv.a{color:var(--accent2)}
+main{grid-area:main;display:flex;flex-direction:column;overflow:hidden}
+#msgs{flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:16px;scroll-behavior:smooth}
+.msg{max-width:72%;display:flex;flex-direction:column;gap:3px;animation:fu .22s ease}
+@keyframes fu{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
+.msg.user{align-self:flex-end;align-items:flex-end}
+.msg.assistant{align-self:flex-start}
+.msg.system{align-self:center;max-width:88%}
+.mr{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:.07em;text-transform:uppercase;padding:0 3px}
+.mb{padding:11px 15px;border-radius:14px;font-size:14px;line-height:1.65;white-space:pre-wrap;word-break:break-word}
+.msg.user .mb{background:var(--accent);color:#fff;border-radius:14px 14px 4px 14px}
+.msg.assistant .mb{background:var(--bg3);border:1px solid var(--border);border-radius:14px 14px 14px 4px}
+.msg.system .mb{background:rgba(124,106,255,.08);border:1px solid rgba(124,106,255,.25);border-radius:10px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--accent2);text-align:center;padding:8px 14px}
+.badge{font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 8px;border-radius:20px;display:inline-block;margin-top:2px}
+.badge.s{background:rgba(52,211,153,.12);color:var(--green);border:1px solid rgba(52,211,153,.25)}
+.badge.k{background:rgba(107,104,128,.1);color:var(--muted);border:1px solid var(--border)}
+.tdots span{display:inline-block;width:6px;height:6px;background:var(--muted);border-radius:50%;animation:d 1.2s ease-in-out infinite;margin:0 2px}
+.tdots span:nth-child(2){animation-delay:.2s}.tdots span:nth-child(3){animation-delay:.4s}
+@keyframes d{0%,80%,100%{transform:scale(.8);opacity:.4}40%{transform:scale(1.1);opacity:1}}
+.ibar{padding:14px 22px 18px;border-top:1px solid var(--border);background:var(--bg2);display:flex;gap:9px;align-items:flex-end}
+#inp{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);font-family:'Syne',sans-serif;font-size:14px;padding:11px 14px;border-radius:12px;resize:none;outline:none;min-height:46px;max-height:150px;line-height:1.5;transition:border-color .15s}
+#inp:focus{border-color:var(--accent)}
+#inp::placeholder{color:var(--muted)}
+#sbtn{width:46px;height:46px;background:var(--accent);border:none;border-radius:12px;cursor:pointer;font-size:17px;display:flex;align-items:center;justify-content:center;transition:opacity .15s;flex-shrink:0}
+#sbtn:hover{opacity:.85}#sbtn:disabled{opacity:.35;cursor:not-allowed}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;text-align:center}
+.ei{font-size:38px;margin-bottom:4px}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--dim);border-radius:2px}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo"><div class="logo-icon">⚡</div>Ctx<span>Crush</span></div>
+  <span class="tag">LIVE TESTER</span>
+  <div class="dot" id="dot"></div>
+</header>
+<aside>
+  <div>
+    <div class="slbl">Config</div>
+    <div class="field">
+      <label>Proxy URL</label>
+      <input id="purl" type="text" value="${proxyBase}" readonly style="opacity:.6;cursor:not-allowed">
+      <div class="hint">Auto-set to this server</div>
+    </div>
+    <div class="field">
+      <label>OpenAI API Key</label>
+      <input id="akey" type="password" placeholder="sk-...">
+      <div class="hint">Forwarded to OpenAI. Never stored.</div>
+    </div>
+    <div class="field">
+      <label>Model</label>
+      <select id="mdl">
+        <option value="gpt-4o-mini">gpt-4o-mini (cheapest)</option>
+        <option value="gpt-4o">gpt-4o</option>
+        <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+      </select>
+    </div>
+    <button class="btn" onclick="connect()">Connect</button>
+    <button class="btn sec" onclick="clearChat()">Clear Chat</button>
+  </div>
+  <div>
+    <div class="slbl">Session Stats</div>
+    <div class="sgrid">
+      <div class="sc w"><div class="sl">Tokens saved</div><div class="sv g" id="ss">0</div></div>
+      <div class="sc"><div class="sl">Requests</div><div class="sv a" id="sr">0</div></div>
+      <div class="sc"><div class="sl">Avg saved</div><div class="sv" id="sp">0%</div></div>
+    </div>
+  </div>
+</aside>
+<main>
+  <div id="msgs">
+    <div class="empty" id="empty">
+      <div class="ei">⚡</div>
+      <div>Enter your OpenAI API key<br>and click <strong>Connect</strong></div>
+    </div>
+  </div>
+  <div class="ibar">
+    <textarea id="inp" placeholder="Type a message… (Enter to send)" rows="1"
+      onkeydown="hk(event)" oninput="ar(this)"></textarea>
+    <button id="sbtn" onclick="send()" disabled>➤</button>
+  </div>
+</main>
+<script>
+const PROXY='${proxyBase}';
+let hist=[],conn=false,ss={saved:0,reqs:0,before:0};
+const $=id=>document.getElementById(id);
+function setConn(on){$('dot').className='dot'+(on?' on':'');conn=on;$('sbtn').disabled=!on}
+function ar(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,150)+'px'}
+function hk(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(conn)send()}}
+function addMsg(role,text,badge){
+  $('empty')?.remove();
+  const w=document.createElement('div');w.className='msg '+role;
+  const r=document.createElement('div');r.className='mr';r.textContent=role==='user'?'You':role==='assistant'?'AI':'System';
+  const b=document.createElement('div');b.className='mb';b.textContent=text;
+  w.appendChild(r);w.appendChild(b);
+  if(badge){const bd=document.createElement('span');bd.className='badge '+(badge.t==='s'?'s':'k');bd.textContent=badge.l;w.appendChild(bd)}
+  $('msgs').appendChild(w);$('msgs').scrollTop=$('msgs').scrollHeight;return b;
+}
+function addTyping(){
+  $('empty')?.remove();
+  const w=document.createElement('div');w.className='msg assistant';w.id='typing';
+  w.innerHTML='<div class="mr">AI</div><div class="mb"><span class="tdots"><span></span><span></span><span></span></span></div>';
+  $('msgs').appendChild(w);$('msgs').scrollTop=$('msgs').scrollHeight;
+}
+function rmTyping(){$('typing')?.remove()}
+function updStats(saved,before){
+  ss.saved+=saved;ss.reqs++;ss.before+=before;
+  $('ss').textContent=ss.saved.toLocaleString();
+  $('sr').textContent=ss.reqs;
+  $('sp').textContent=(ss.before>0?Math.round(ss.saved/ss.before*100):0)+'%';
+}
+async function connect(){
+  const key=$('akey').value.trim();
+  if(!key){alert('Please enter your OpenAI API key (sk-...)');return}
+  try{
+    const r=await fetch(PROXY+'/');
+    const d=await r.json();
+    if(d.status==='running'){
+      setConn(true);
+      addMsg('system','Connected to '+d.name+'\\nWindow: '+d.config.windowSize+' msgs | Filler pruning: '+d.config.pruneFillers+'\\n\\nStart chatting — compression kicks in after '+d.config.minMessagesToCompress+' messages.');
+    }
+  }catch(e){addMsg('system','Could not reach proxy: '+e.message)}
+}
+async function send(){
+  const inp=$('inp'),text=inp.value.trim();
+  if(!text)return;
+  const key=$('akey').value.trim(),model=$('mdl').value;
+  addMsg('user',text);hist.push({role:'user',content:text});
+  inp.value='';inp.style.height='auto';$('sbtn').disabled=true;addTyping();
+  try{
+    const r=await fetch(PROXY+'/v1/chat/completions',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+      body:JSON.stringify({model,messages:hist,stream:false})
+    });
+    rmTyping();
+    if(!r.ok){const e=await r.json().catch(()=>({error:{message:r.statusText}}));addMsg('system','Error: '+(e.error?.message||r.statusText));hist.pop();return}
+    const d=await r.json();
+    const reply=d.choices?.[0]?.message?.content||'(empty)';
+    const saved=parseInt(r.headers.get('X-CtxCrush-Saved-Tokens')||'0');
+    const pct=parseInt(r.headers.get('X-CtxCrush-Saved-Pct')||'0');
+    const om=parseInt(r.headers.get('X-CtxCrush-Original-Msgs')||'0');
+    const cm=parseInt(r.headers.get('X-CtxCrush-Compressed-Msgs')||'0');
+    const badge=saved>0?{t:'s',l:'⚡ '+saved+' tokens saved ('+pct+'%) · '+om+'→'+cm+' msgs'}:null;
+    addMsg('assistant',reply,badge);hist.push({role:'assistant',content:reply});
+    if(saved>0){const b=Math.ceil(hist.slice(0,-1).reduce((s,m)=>s+m.content.length,0)/4);updStats(saved,b)}
+  }catch(e){rmTyping();addMsg('system','Request failed: '+e.message);hist.pop()}
+  finally{$('sbtn').disabled=false;inp.focus()}
+}
+function clearChat(){hist=[];$('msgs').innerHTML='<div class="empty" id="empty"><div class="ei">⚡</div><div>Chat cleared.</div></div>'}
+</script>
+</body>
+</html>`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CORE: compress + forward
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function handleRequest(req, res, upstreamURL) {
+  stats.requests++;
+  const body = req.body;
+  const messages = body.messages;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return forward(req, res, upstreamURL, body);
+  }
+  const { messages: compressed, stats: cStats } = compressMessages(messages, CFG);
+  if (cStats.skipped) {
+    stats.skipped++;
+    console.log(`[CtxCrush] SKIP  ${cStats.reason} | ${messages.length} msgs`);
+    return forward(req, res, upstreamURL, body);
+  }
+  stats.compressed++;
+  stats.totalSaved  += cStats.tokensSaved;
+  stats.totalBefore += cStats.tokensBefore;
+  console.log(`[CtxCrush] ✓  ${cStats.originalMsgCount}→${cStats.compressedMsgCount} msgs | saved ${cStats.tokensSaved} tokens (${cStats.percentSaved}%) | ${cStats.compressionType}`);
+  res.setHeader('X-CtxCrush-Saved-Tokens',    String(cStats.tokensSaved));
+  res.setHeader('X-CtxCrush-Saved-Pct',       String(cStats.percentSaved));
+  res.setHeader('X-CtxCrush-Original-Msgs',   String(cStats.originalMsgCount));
+  res.setHeader('X-CtxCrush-Compressed-Msgs', String(cStats.compressedMsgCount));
+  const newBody = { ...body, messages: compressed };
+  return forward(req, res, upstreamURL, newBody);
+}
+
+async function forward(req, res, upstreamURL, body) {
+  const headers = {
+    'Content-Type':  'application/json',
+    'Authorization': req.headers['authorization'] || '',
   };
+  if (req.headers['x-api-key'])         headers['x-api-key']         = req.headers['x-api-key'];
+  if (req.headers['anthropic-version']) headers['anthropic-version'] = req.headers['anthropic-version'];
+  let upstream;
+  try {
+    upstream = await fetch(upstreamURL, {
+      method:  'POST',
+      headers,
+      body:    JSON.stringify(body),
+    });
+  } catch (err) {
+    console.error('[CtxCrush] upstream fetch error:', err.message);
+    return res.status(502).json({ error: 'Proxy upstream error', detail: err.message });
+  }
+  res.status(upstream.status);
+  upstream.headers.forEach((val, key) => {
+    if (!['content-encoding', 'transfer-encoding', 'connection'].includes(key)) {
+      res.setHeader(key, val);
+    }
+  });
+  upstream.body.pipe(res);
 }
 
-// Expose
-if (typeof window !== 'undefined') {
-  window.__ctxCrush = { compressMessages, estimateTokens, extractText, classifyMessage };
-  window.dispatchEvent(new CustomEvent('__ctxCrush_ready'));
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// ROUTES
+// ─────────────────────────────────────────────────────────────────────────────
 
-// CommonJS export — added for proxy server use
-if (typeof module !== 'undefined') {
-  module.exports = { compressMessages, estimateTokens, extractText, classifyMessage };
-}
+app.post('/v1/chat/completions', (req, res) => {
+  handleRequest(req, res, 'https://api.openai.com/v1/chat/completions');
+});
 
+app.post('/v1/messages', (req, res) => {
+  handleRequest(req, res, 'https://api.anthropic.com/v1/messages');
+});
+
+app.all('/v1/*', async (req, res) => {
+  const upstreamURL = 'https://api.openai.com' + req.path;
+  try {
+    const upstream = await fetch(upstreamURL, {
+      method:  req.method,
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': req.headers['authorization'] || '',
+      },
+      body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined,
+    });
+    res.status(upstream.status);
+    upstream.headers.forEach((val, key) => res.setHeader(key, val));
+    upstream.body.pipe(res);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// START
+// ─────────────────────────────────────────────────────────────────────────────
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`\n⚡ CtxCrush Proxy running on port ${PORT}`);
+  console.log(`   OpenAI  →  POST http://localhost:${PORT}/v1/chat/completions`);
+  console.log(`   Claude  →  POST http://localhost:${PORT}/v1/messages`);
+  console.log(`   Stats   →  GET  http://localhost:${PORT}/stats`);
+  console.log(`   Tester  →  GET  http://localhost:${PORT}/test`);
+  console.log(`\n   Config: windowSize=${CFG.windowSize} | pruneFillers=${CFG.pruneFillers}\n`);
+});
