@@ -57,7 +57,7 @@ app.get('/stats', (req, res) => res.json(stats));
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/test', (req, res) => {
-  const proxyBase = req.protocol + '://' + req.get('host');
+  const proxyBase = https:// + '://' + req.get('host');
   res.setHeader('Content-Type', 'text/html');
   res.send(`<!DOCTYPE html>
 <html lang="en">
