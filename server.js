@@ -53,7 +53,7 @@ app.get('/', (req, res) => {
 app.get('/stats', (req, res) => res.json(stats));
 
 // ─────────────────────────────────────────────────────────────────────────────
-// /test — browser chat UI (served inline, no separate file needed)
+// /test — browser chat UI (served inline)
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/test', (req, res) => {
@@ -138,17 +138,31 @@ main{grid-area:main;display:flex;flex-direction:column;overflow:hidden}
       <div class="hint">Auto-set to this server</div>
     </div>
     <div class="field">
-      <label>OpenAI API Key</label>
-      <input id="akey" type="password" placeholder="sk-...">
-      <div class="hint">Forwarded to OpenAI. Never stored.</div>
+      <label>Provider</label>
+      <select id="prov" onchange="onProvChange()">
+        <option value="groq">Groq (FREE — no card)</option>
+        <option value="openrouter">OpenRouter (1 key, all models)</option>
+        <option value="openai">OpenAI (paid)</option>
+        <option value="gemini">Google Gemini (free tier)</option>
+        <option value="custom">Custom (any provider)</option>
+      </select>
+      <div class="hint" id="prov-hint">Free key at console.groq.com</div>
+    </div>
+    <div class="field" id="baseurl-field" style="display:none">
+      <label>Base URL</label>
+      <input id="baseurl" type="text" placeholder="https://api.example.com/v1/chat/completions">
+      <div class="hint">Full chat-completions URL of any OpenAI-compatible API</div>
+    </div>
+    <div class="field">
+      <label>API Key</label>
+      <input id="akey" type="password" placeholder="gsk_...">
+      <div class="hint">Forwarded to provider. Never stored.</div>
     </div>
     <div class="field">
       <label>Model</label>
-      <select id="mdl">
-        <option value="gpt-4o-mini">gpt-4o-mini (cheapest)</option>
-        <option value="gpt-4o">gpt-4o</option>
-        <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
-      </select>
+      <input id="mdl" type="text" value="llama-3.3-70b-versatile" list="modellist">
+      <datalist id="modellist"></datalist>
+      <div class="hint">Pick from list or type any model name</div>
     </div>
     <button class="btn" onclick="connect()">Connect</button>
     <button class="btn sec" onclick="clearChat()">Clear Chat</button>
@@ -166,7 +180,7 @@ main{grid-area:main;display:flex;flex-direction:column;overflow:hidden}
   <div id="msgs">
     <div class="empty" id="empty">
       <div class="ei">⚡</div>
-      <div>Enter your OpenAI API key<br>and click <strong>Connect</strong></div>
+      <div>Pick a provider, paste your key<br>and click <strong>Connect</strong></div>
     </div>
   </div>
   <div class="ibar">
@@ -179,6 +193,22 @@ main{grid-area:main;display:flex;flex-direction:column;overflow:hidden}
 const PROXY='${proxyBase}';
 let hist=[],conn=false,ss={saved:0,reqs:0,before:0};
 const $=id=>document.getElementById(id);
+const PROVIDERS={
+  groq:       {path:'/groq/v1/chat/completions',       keyPrefix:'gsk_...', hint:'Free key at console.groq.com',  models:['llama-3.3-70b-versatile','llama-3.1-8b-instant']},
+  openrouter: {path:'/openrouter/v1/chat/completions', keyPrefix:'sk-or-...', hint:'1 key for all models at openrouter.ai', models:['openai/gpt-4o-mini','anthropic/claude-3.5-sonnet','google/gemini-2.0-flash-exp','meta-llama/llama-3.3-70b-instruct','deepseek/deepseek-chat']},
+  openai:     {path:'/v1/chat/completions',            keyPrefix:'sk-...',  hint:'Paid key at platform.openai.com', models:['gpt-4o-mini','gpt-4o','gpt-3.5-turbo']},
+  gemini:     {path:'/gemini/v1/chat/completions',     keyPrefix:'AIza...', hint:'Free key at aistudio.google.com', models:['gemini-2.0-flash','gemini-1.5-flash']},
+  custom:     {path:'/custom/v1/chat/completions',     keyPrefix:'your-api-key', hint:'Enter the base URL below', models:[]}
+};
+function onProvChange(){
+  const pv=$('prov').value,p=PROVIDERS[pv];
+  $('akey').placeholder=p.keyPrefix;
+  $('prov-hint').textContent=p.hint;
+  $('modellist').innerHTML=p.models.map(m=>'<option value="'+m+'">').join('');
+  if(p.models.length)$('mdl').value=p.models[0];
+  $('baseurl-field').style.display=pv==='custom'?'flex':'none';
+  setConn(false);
+}
 function setConn(on){$('dot').className='dot'+(on?' on':'');conn=on;$('sbtn').disabled=!on}
 function ar(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,150)+'px'}
 function hk(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(conn)send()}}
@@ -206,28 +236,31 @@ function updStats(saved,before){
 }
 async function connect(){
   const key=$('akey').value.trim();
-  if(!key){alert('Please enter your OpenAI API key (sk-...)');return}
+  if(!key){alert('Please enter your API key first');return}
   try{
     const r=await fetch(PROXY+'/');
     const d=await r.json();
     if(d.status==='running'){
       setConn(true);
-      addMsg('system','Connected to '+d.name+'\\nWindow: '+d.config.windowSize+' msgs | Filler pruning: '+d.config.pruneFillers+'\\n\\nStart chatting — compression kicks in after '+d.config.minMessagesToCompress+' messages.');
+      addMsg('system','Connected to '+d.name+' via '+$('prov').value.toUpperCase()+'\\nWindow: '+d.config.windowSize+' msgs | Filler pruning: '+d.config.pruneFillers+'\\n\\nStart chatting — compression kicks in after '+d.config.minMessagesToCompress+' messages.');
     }
-  }catch(e){addMsg('system','Could not reach proxy: '+e.message)}
+  }catch(e){addMsg('system','Could not reach proxy: '+e.message+'\\n\\nThe server may be waking up (free tier sleeps after 15 min). Wait 30 sec and click Connect again.')}
 }
 async function send(){
   const inp=$('inp'),text=inp.value.trim();
   if(!text)return;
-  const key=$('akey').value.trim(),model=$('mdl').value;
+  const key=$('akey').value.trim(),model=$('mdl').value.trim();
+  const pv=$('prov').value,endpoint=PROVIDERS[pv].path;
+  const headers={'Content-Type':'application/json','Authorization':'Bearer '+key};
+  if(pv==='custom'){
+    const bu=$('baseurl').value.trim();
+    if(!bu){addMsg('system','Please enter a Base URL for the custom provider');return}
+    headers['X-Upstream-Url']=bu;
+  }
   addMsg('user',text);hist.push({role:'user',content:text});
   inp.value='';inp.style.height='auto';$('sbtn').disabled=true;addTyping();
   try{
-    const r=await fetch(PROXY+'/v1/chat/completions',{
-      method:'POST',
-      headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
-      body:JSON.stringify({model,messages:hist,stream:false})
-    });
+    const r=await fetch(PROXY+endpoint,{method:'POST',headers,body:JSON.stringify({model,messages:hist,stream:false})});
     rmTyping();
     if(!r.ok){const e=await r.json().catch(()=>({error:{message:r.statusText}}));addMsg('system','Error: '+(e.error?.message||r.statusText));hist.pop();return}
     const d=await r.json();
@@ -254,25 +287,37 @@ function clearChat(){hist=[];$('msgs').innerHTML='<div class="empty" id="empty">
 
 async function handleRequest(req, res, upstreamURL) {
   stats.requests++;
+
+  // Allow the client to override the upstream target via header.
+  // This makes the proxy work with ANY OpenAI-compatible provider.
+  const override = req.headers['x-upstream-url'];
+  if (override) upstreamURL = override;
+
   const body = req.body;
   const messages = body.messages;
   if (!Array.isArray(messages) || messages.length === 0) {
     return forward(req, res, upstreamURL, body);
   }
+
   const { messages: compressed, stats: cStats } = compressMessages(messages, CFG);
+
   if (cStats.skipped) {
     stats.skipped++;
     console.log(`[CtxCrush] SKIP  ${cStats.reason} | ${messages.length} msgs`);
     return forward(req, res, upstreamURL, body);
   }
+
   stats.compressed++;
   stats.totalSaved  += cStats.tokensSaved;
   stats.totalBefore += cStats.tokensBefore;
+
   console.log(`[CtxCrush] ✓  ${cStats.originalMsgCount}→${cStats.compressedMsgCount} msgs | saved ${cStats.tokensSaved} tokens (${cStats.percentSaved}%) | ${cStats.compressionType}`);
+
   res.setHeader('X-CtxCrush-Saved-Tokens',    String(cStats.tokensSaved));
   res.setHeader('X-CtxCrush-Saved-Pct',       String(cStats.percentSaved));
   res.setHeader('X-CtxCrush-Original-Msgs',   String(cStats.originalMsgCount));
   res.setHeader('X-CtxCrush-Compressed-Msgs', String(cStats.compressedMsgCount));
+
   const newBody = { ...body, messages: compressed };
   return forward(req, res, upstreamURL, newBody);
 }
@@ -284,6 +329,7 @@ async function forward(req, res, upstreamURL, body) {
   };
   if (req.headers['x-api-key'])         headers['x-api-key']         = req.headers['x-api-key'];
   if (req.headers['anthropic-version']) headers['anthropic-version'] = req.headers['anthropic-version'];
+
   let upstream;
   try {
     upstream = await fetch(upstreamURL, {
@@ -295,6 +341,7 @@ async function forward(req, res, upstreamURL, body) {
     console.error('[CtxCrush] upstream fetch error:', err.message);
     return res.status(502).json({ error: 'Proxy upstream error', detail: err.message });
   }
+
   res.status(upstream.status);
   upstream.headers.forEach((val, key) => {
     if (!['content-encoding', 'transfer-encoding', 'connection'].includes(key)) {
@@ -308,14 +355,41 @@ async function forward(req, res, upstreamURL, body) {
 // ROUTES
 // ─────────────────────────────────────────────────────────────────────────────
 
+// OpenAI
 app.post('/v1/chat/completions', (req, res) => {
   handleRequest(req, res, 'https://api.openai.com/v1/chat/completions');
 });
 
+// Anthropic Claude
 app.post('/v1/messages', (req, res) => {
   handleRequest(req, res, 'https://api.anthropic.com/v1/messages');
 });
 
+// Groq (FREE)
+app.post('/groq/v1/chat/completions', (req, res) => {
+  handleRequest(req, res, 'https://api.groq.com/openai/v1/chat/completions');
+});
+
+// Google Gemini
+app.post('/gemini/v1/chat/completions', (req, res) => {
+  handleRequest(req, res, 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions');
+});
+
+// OpenRouter — ONE key, hundreds of models
+app.post('/openrouter/v1/chat/completions', (req, res) => {
+  handleRequest(req, res, 'https://openrouter.ai/api/v1/chat/completions');
+});
+
+// UNIVERSAL — any OpenAI-compatible provider via X-Upstream-Url header
+app.post('/custom/v1/chat/completions', (req, res) => {
+  const target = req.headers['x-upstream-url'];
+  if (!target) {
+    return res.status(400).json({ error: 'Custom provider requires X-Upstream-Url header' });
+  }
+  handleRequest(req, res, target);
+});
+
+// Catch-all for other OpenAI endpoints (passed through unmodified)
 app.all('/v1/*', async (req, res) => {
   const upstreamURL = 'https://api.openai.com' + req.path;
   try {
@@ -341,9 +415,10 @@ app.all('/v1/*', async (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n⚡ CtxCrush Proxy running on port ${PORT}`);
-  console.log(`   OpenAI  →  POST http://localhost:${PORT}/v1/chat/completions`);
-  console.log(`   Claude  →  POST http://localhost:${PORT}/v1/messages`);
-  console.log(`   Stats   →  GET  http://localhost:${PORT}/stats`);
-  console.log(`   Tester  →  GET  http://localhost:${PORT}/test`);
+  console.log(`   OpenAI     →  POST http://localhost:${PORT}/v1/chat/completions`);
+  console.log(`   Groq       →  POST http://localhost:${PORT}/groq/v1/chat/completions`);
+  console.log(`   OpenRouter →  POST http://localhost:${PORT}/openrouter/v1/chat/completions`);
+  console.log(`   Custom     →  POST http://localhost:${PORT}/custom/v1/chat/completions`);
+  console.log(`   Tester     →  GET  http://localhost:${PORT}/test`);
   console.log(`\n   Config: windowSize=${CFG.windowSize} | pruneFillers=${CFG.pruneFillers}\n`);
 });
