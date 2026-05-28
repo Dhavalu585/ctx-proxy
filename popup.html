@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>CtxCrush</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:#0d0d0f; --bg2:#161619; --bg3:#1e1e23; --border:#2a2a32;
+    --accent:#7c6aff; --accent2:#a78bfa; --green:#34d399; --amber:#fbbf24;
+    --text:#f0eeff; --muted:#6b6a80; --dim:#3a3a48;
+  }
+  body { width:320px; background:var(--bg); color:var(--text); font-family:system-ui,sans-serif; font-size:13px; }
+
+  .header { padding:16px 18px 12px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; }
+  .logo { display:flex; align-items:center; gap:9px; }
+  .logo-icon { width:28px; height:28px; background:var(--accent); border-radius:7px; display:flex; align-items:center; justify-content:center; font-size:15px; }
+  .logo-name { font-size:15px; font-weight:800; letter-spacing:-0.3px; }
+  .logo-name span { color:var(--accent2); }
+  .pill { font-size:10px; font-weight:600; padding:3px 9px; border-radius:20px; font-family:monospace; }
+  .pill.on  { background:rgba(52,211,153,.15); color:var(--green); border:1px solid rgba(52,211,153,.3); }
+  .pill.off { background:rgba(107,106,128,.15); color:var(--muted); border:1px solid var(--border); }
+
+  /* Live badge */
+  .live-badge { display:flex; align-items:center; gap:5px; font-size:10px; color:var(--green); font-family:monospace; }
+  .live-dot { width:6px; height:6px; border-radius:50%; background:var(--green); animation:blink 1.4s ease-in-out infinite; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  .stats { padding:14px 18px; display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+  .stat { background:var(--bg2); border:1px solid var(--border); border-radius:10px; padding:11px 13px; }
+  .stat.wide { grid-column:1/-1; border-color:rgba(124,106,255,.35); background:rgba(124,106,255,.07); }
+  .stat-label { font-size:9px; color:var(--muted); text-transform:uppercase; letter-spacing:.07em; margin-bottom:5px; font-family:monospace; }
+  .stat-val { font-size:24px; font-weight:800; letter-spacing:-1px; line-height:1; }
+  .stat-val.g { color:var(--green); }
+  .stat-val.a { color:var(--accent2); }
+  .stat-sub { font-size:9px; color:var(--muted); margin-top:3px; font-family:monospace; }
+  .pct-badge { font-size:10px; color:var(--green); background:rgba(52,211,153,.12); padding:2px 7px; border-radius:20px; margin-left:6px; font-family:monospace; display:none; }
+
+  .divider { height:1px; background:var(--border); margin:0 18px; }
+
+  .controls { padding:13px 18px; display:flex; flex-direction:column; gap:12px; }
+  .ctrl-row { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .ctrl-label { font-size:12px; font-weight:600; display:flex; flex-direction:column; gap:1px; }
+  .ctrl-hint { font-size:9px; color:var(--muted); font-weight:400; font-family:monospace; }
+
+  /* Toggle */
+  .toggle-wrap { position:relative; width:40px; height:22px; cursor:pointer; flex-shrink:0; }
+  .toggle-wrap input { opacity:0; position:absolute; width:0; height:0; }
+  .track { position:absolute; inset:0; background:var(--dim); border-radius:11px; transition:background .2s; }
+  .thumb { position:absolute; top:3px; left:3px; width:16px; height:16px; background:var(--muted); border-radius:50%; transition:transform .2s,background .2s; }
+  .toggle-wrap input:checked ~ .track { background:var(--accent); }
+  .toggle-wrap input:checked ~ .thumb { transform:translateX(18px); background:#fff; }
+
+  /* Slider */
+  .slider-wrap { display:flex; align-items:center; gap:8px; }
+  input[type=range] { -webkit-appearance:none; width:110px; height:3px; background:var(--dim); border-radius:2px; outline:none; cursor:pointer; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); cursor:pointer; }
+  .slider-val { font-size:11px; color:var(--accent2); min-width:24px; text-align:right; font-family:monospace; font-weight:600; }
+
+  /* Last compressed info */
+  .last-info { margin:0 18px 12px; background:var(--bg2); border:1px solid var(--border); border-radius:8px; padding:9px 12px; font-size:10px; color:var(--muted); font-family:monospace; line-height:1.6; display:none; }
+  .last-info.show { display:block; }
+  .last-info b { color:var(--accent2); font-weight:600; }
+
+  .footer { padding:10px 18px 14px; display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); }
+  .btn-reset { font-size:10px; color:var(--muted); background:none; border:1px solid var(--border); padding:5px 10px; border-radius:6px; cursor:pointer; font-family:monospace; transition:all .15s; }
+  .btn-reset:hover { color:var(--text); border-color:var(--dim); }
+  .version { font-size:9px; color:var(--dim); font-family:monospace; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <div class="logo-name">Ctx<span>Crush</span></div>
+  </div>
+  <span class="pill on" id="pill">ACTIVE</span>
+</div>
+
+<div class="stats">
+  <div class="stat wide">
+    <div class="stat-label">Tokens saved (lifetime)</div>
+    <div style="display:flex;align-items:baseline">
+      <div class="stat-val g" id="val-saved">0</div>
+      <span class="pct-badge" id="val-pct">—</span>
+    </div>
+    <div class="stat-sub" id="val-cost">waiting for first compression…</div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">Requests compressed</div>
+    <div class="stat-val a" id="val-reqs">0</div>
+    <div class="stat-sub">total</div>
+  </div>
+
+  <div class="stat">
+    <div class="stat-label">Last compression</div>
+    <div class="stat-val" id="val-last-saved" style="font-size:18px">—</div>
+    <div class="stat-sub" id="val-last-pct">tokens saved</div>
+  </div>
+</div>
+
+<!-- last compression detail line -->
+<div class="last-info" id="last-info"></div>
+
+<div class="divider"></div>
+
+<div class="controls">
+
+  <div class="ctrl-row">
+    <div class="ctrl-label">
+      Compression on/off
+      <span class="ctrl-hint">intercept ChatGPT / Claude requests</span>
+    </div>
+    <label class="toggle-wrap">
+      <input type="checkbox" id="tog-enabled" checked>
+      <div class="track"></div><div class="thumb"></div>
+    </label>
+  </div>
+
+  <div class="ctrl-row">
+    <div class="ctrl-label">
+      Recent messages to keep
+      <span class="ctrl-hint" id="window-hint">last 10 sent verbatim</span>
+    </div>
+    <div class="slider-wrap">
+      <input type="range" id="sl-window" min="2" max="50" value="10" step="1">
+      <span class="slider-val" id="val-window">10</span>
+    </div>
+  </div>
+
+  <div class="ctrl-row">
+    <div class="ctrl-label">
+      Prune filler phrases
+      <span class="ctrl-hint">"Sure!", "Hope this helps!"…</span>
+    </div>
+    <label class="toggle-wrap">
+      <input type="checkbox" id="tog-filler" checked>
+      <div class="track"></div><div class="thumb"></div>
+    </label>
+  </div>
+
+</div>
+
+<div class="footer">
+  <button class="btn-reset" id="btn-reset">RESET STATS</button>
+  <div class="version">v2.0.0</div>
+</div>
+
+<script src="src/popup.js"></script>
+</body>
+</html>
