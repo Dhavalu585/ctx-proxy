@@ -36,7 +36,7 @@ CtxCrush applies five techniques together:
 | **Filler pruning** | Strips zero-information phrases ("Sure!", "Hope this helps!") | Minimal |
 | **Safety check** | If compression wouldn't save tokens, sends the original untouched — never makes things worse | No |
 
-The event-classification approach is adapted from the open-source [context-mode](https://github.com/mksglu/context-mode) project.
+
 
 ---
 
