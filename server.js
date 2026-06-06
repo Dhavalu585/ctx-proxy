@@ -5,6 +5,7 @@ const express  = require('express');
 const cors     = require('cors');
 const fetch    = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 const { compressMessages, estimateTokens } = require('./compressor');
+const { classifyIntent } = require('./intent');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -302,6 +303,11 @@ async function handleRequest(req, res, upstreamURL) {
 
   // Pull out the messages array
   const messages = body.messages;
+  // Stage 2: classify intent and log it (no routing yet)
+  if (Array.isArray(messages)) {
+    const intent = classifyIntent(messages);
+    console.log(`[intent] ${intent}`);
+  }
   if (!Array.isArray(messages) || messages.length === 0) {
     // Nothing to compress — pass straight through
     return forward(req, res, upstreamURL, body);

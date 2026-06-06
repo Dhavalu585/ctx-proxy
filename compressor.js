@@ -1,7 +1,7 @@
 /**
  * CtxCrush — Compression Engine v4
  *
- * Borrowed from context-mode (github.com/mksglu/context-mode):
+ * Idea
  *   - 13-category event classification with priority weights (1=critical…5=low)
  *   - XML session_resume snapshot format (structured sections per category)
  *   - Decisions, errors, intent, role, blocker, task detection
