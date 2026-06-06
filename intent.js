@@ -67,4 +67,15 @@ function classifyIntent(messages) {
   return 'medium';
 }
 
-module.exports = { classifyIntent, getLatestUserText };
+// Stage 3: which model each intent routes to
+const INTENT_MODEL_MAP = {
+  simple:    'llama-3.1-8b-instant',
+  medium:    'llama-3.3-70b-versatile',
+  reasoning: 'llama-3.3-70b-versatile',
+};
+
+function modelForIntent(intent) {
+  return INTENT_MODEL_MAP[intent] || INTENT_MODEL_MAP.medium;
+}
+
+module.exports = { classifyIntent, getLatestUserText, modelForIntent, INTENT_MODEL_MAP };

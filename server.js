@@ -5,7 +5,7 @@ const express  = require('express');
 const cors     = require('cors');
 const fetch    = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 const { compressMessages, estimateTokens } = require('./compressor');
-const { classifyIntent } = require('./intent');
+const { classifyIntent, modelForIntent } = require('./intent');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -58,7 +58,9 @@ app.get('/stats', (req, res) => res.json(stats));
 // ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/test', (req, res) => {
-  const proxyBase = `https://${req.get('host')}`;
+  const proxyBase = req.get('host').includes('localhost')
+  ? `http://${req.get('host')}`
+  : `https://${req.get('host')}`;
   res.setHeader('Content-Type', 'text/html');
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -304,9 +306,12 @@ async function handleRequest(req, res, upstreamURL) {
   // Pull out the messages array
   const messages = body.messages;
   // Stage 2: classify intent and log it (no routing yet)
+  // Stage 2 + 3: classify intent and route to the matching model
   if (Array.isArray(messages)) {
     const intent = classifyIntent(messages);
-    console.log(`[intent] ${intent}`);
+    const chosenModel = modelForIntent(intent);
+    console.log(`[intent] ${intent} → [model] ${chosenModel}`);
+    body.model = chosenModel;   // override the model based on intent
   }
   if (!Array.isArray(messages) || messages.length === 0) {
     // Nothing to compress — pass straight through
