@@ -6,6 +6,7 @@ const cors     = require('cors');
 const fetch    = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 const { compressMessages, estimateTokens } = require('./compressor');
 const { classifyIntent, modelForIntent } = require('./intent');
+const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -312,6 +313,19 @@ async function handleRequest(req, res, upstreamURL) {
     const chosenModel = modelForIntent(intent);
     console.log(`[intent] ${intent} → [model] ${chosenModel}`);
     body.model = chosenModel;   // override the model based on intent
+  }
+  // Stage 4: structured retrieval (LOG ONLY — not injected into context yet)
+  if (Array.isArray(messages) && messages.length > 6) {
+    // split: older messages vs the latest user query
+    const latestUser = [...messages].reverse().find(m => m.role === 'user');
+    const queryText = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
+    const oldMessages = messages.slice(0, -2); // everything except the most recent exchange
+    const { retrieved, branchScores } = retrieveRelevant(oldMessages, queryText);
+    const topBranches = branchScores.filter(b => b.score > 0).map(b => `${b.category}(${b.score})`).join(', ');
+    console.log(`[retrieval] branches: ${topBranches || 'none'} | items: ${retrieved.length}`);
+    if (retrieved.length) {
+      console.log(formatRetrieved(retrieved));
+    }
   }
   if (!Array.isArray(messages) || messages.length === 0) {
     // Nothing to compress — pass straight through

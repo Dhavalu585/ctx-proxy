@@ -1,0 +1,13 @@
+{
+  "messages": [
+    { "role": "user", "content": "I'm planning a 10-day trip to Japan in April." },
+    { "role": "assistant", "content": "Great, let's organize it." },
+    { "role": "user", "content": "Use a mid-range budget, avoid luxury hotels, prefer local guesthouses." },
+    { "role": "assistant", "content": "Noted, mid-range with guesthouses." },
+    { "role": "user", "content": "Error: my flight booking site keeps timing out at checkout." },
+    { "role": "assistant", "content": "That's a booking site issue, try another browser." },
+    { "role": "user", "content": "I decided to fly into Tokyo Narita and out of Osaka Kansai." },
+    { "role": "assistant", "content": "Good routing choice." },
+    { "role": "user", "content": "Remind me what we decided about the budget and hotels." }
+  ]
+}
