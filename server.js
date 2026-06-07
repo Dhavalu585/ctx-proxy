@@ -292,7 +292,7 @@ function clearChat(){hist=[];$('msgs').innerHTML='<div class="empty" id="empty">
 // ─────────────────────────────────────────────────────────────────────────────
 // CORE: compress + forward
 // ─────────────────────────────────────────────────────────────────────────────
-
+// Stage 4: structured retrieval (LOG ONLY — not injected into context yet)
 async function handleRequest(req, res, upstreamURL) {
   stats.requests++;
 
@@ -306,7 +306,6 @@ async function handleRequest(req, res, upstreamURL) {
 
   // Pull out the messages array
   const messages = body.messages;
-  // Stage 2: classify intent and log it (no routing yet)
   // Stage 2 + 3: classify intent and route to the matching model
   if (Array.isArray(messages)) {
     const intent = classifyIntent(messages);
@@ -314,19 +313,27 @@ async function handleRequest(req, res, upstreamURL) {
     console.log(`[intent] ${intent} → [model] ${chosenModel}`);
     body.model = chosenModel;   // override the model based on intent
   }
-  // Stage 4: structured retrieval (LOG ONLY — not injected into context yet)
+
+  // Stage 4b: structured retrieval — inject relevant old context into the request
   if (Array.isArray(messages) && messages.length > 6) {
-    // split: older messages vs the latest user query
     const latestUser = [...messages].reverse().find(m => m.role === 'user');
     const queryText = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
-    const oldMessages = messages.slice(0, -2); // everything except the most recent exchange
+    const oldMessages = messages.slice(0, -2);
     const { retrieved, branchScores } = retrieveRelevant(oldMessages, queryText);
     const topBranches = branchScores.filter(b => b.score > 0).map(b => `${b.category}(${b.score})`).join(', ');
     console.log(`[retrieval] branches: ${topBranches || 'none'} | items: ${retrieved.length}`);
+
     if (retrieved.length) {
-      console.log(formatRetrieved(retrieved));
+      const contextBlock = formatRetrieved(retrieved);
+      const injected = {
+        role: 'system',
+        content: `Relevant context from earlier in this conversation:\n${contextBlock}`
+      };
+      body.messages = [...messages.slice(0, -1), injected, messages[messages.length - 1]];
+      console.log(`[retrieval] injected ${retrieved.length} items into context`);
     }
   }
+
   if (!Array.isArray(messages) || messages.length === 0) {
     // Nothing to compress — pass straight through
     return forward(req, res, upstreamURL, body);
