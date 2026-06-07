@@ -7,7 +7,7 @@ const fetch    = (...a) => import('node-fetch').then(({ default: f }) => f(...a)
 const { compressMessages, estimateTokens } = require('./compressor');
 const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
-
+const { assembleIntents, formatAssembly } = require('./assembly');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -313,7 +313,18 @@ async function handleRequest(req, res, upstreamURL) {
     console.log(`[intent] ${intent} → [model] ${chosenModel}`);
     body.model = chosenModel;   // override the model based on intent
   }
-
+// Stage 5: intent assembly (Path B — model-based, keyword fallback). LOG ONLY.
+  if (Array.isArray(messages)) {
+    const latestUser = [...messages].reverse().find(m => m.role === 'user');
+    const qText = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
+    if (qText) {
+      const groqKey = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+      const fetchFn = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
+      const assembled = await assembleIntents(qText, groqKey, fetchFn);
+      console.log(`[assembly] method=${assembled.method} | ${assembled.fragments.length} intent(s)${assembled.isMulti ? ':' : ' (single)'}`);
+      if (assembled.isMulti) console.log(formatAssembly(assembled));
+    }
+  }
   // Stage 4b: structured retrieval — inject relevant old context into the request
   if (Array.isArray(messages) && messages.length > 6) {
     const latestUser = [...messages].reverse().find(m => m.role === 'user');

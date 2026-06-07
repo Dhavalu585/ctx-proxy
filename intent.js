@@ -77,5 +77,12 @@ const INTENT_MODEL_MAP = {
 function modelForIntent(intent) {
   return INTENT_MODEL_MAP[intent] || INTENT_MODEL_MAP.medium;
 }
-
-module.exports = { classifyIntent, getLatestUserText, modelForIntent, INTENT_MODEL_MAP };
+// Stage 5: classify a single text fragment (used by intent assembly)
+function classifyText(text) {
+  if (!text || !text.trim()) return 'medium';
+  const t = text.trim();
+  for (const rx of REASONING_SIGNALS) if (rx.test(t)) return 'reasoning';
+  if (t.length < 80) for (const rx of SIMPLE_SIGNALS) if (rx.test(t)) return 'simple';
+  return 'medium';
+}
+module.exports = { classifyIntent, getLatestUserText, modelForIntent, INTENT_MODEL_MAP, classifyText };
