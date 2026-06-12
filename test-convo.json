@@ -8,6 +8,6 @@
     { "role": "assistant", "content": "That's a booking site issue, try another browser." },
     { "role": "user", "content": "I decided to fly into Tokyo Narita and out of Osaka Kansai." },
     { "role": "assistant", "content": "Good routing choice." },
-    { "role": "user", "content": "Summarize our budget decision, then write a Python function to total the costs, and explain the spending trend" }
+    { "role": "user", "content": "Remind me what budget I chose for Japan, then write a Python function to total a 10-day trip cost, and explain the best month to visit Japan." }
   ]
 }

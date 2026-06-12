@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * CtxCrush V2 — Intent Assembly (Stage 5, Path B)
+ * CtxCrush V3 — Intent Assembly (Stage 5, Path B)
  * Model-based decomposition with keyword fallback.
  */
 

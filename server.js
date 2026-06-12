@@ -8,8 +8,10 @@ const { compressMessages, estimateTokens } = require('./compressor');
 const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
+const { orchestrate, combineResults } = require('./orchestrator');
 const app  = express();
 const PORT = process.env.PORT || 3000;
+
 
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
@@ -313,16 +315,35 @@ async function handleRequest(req, res, upstreamURL) {
     console.log(`[intent] ${intent} → [model] ${chosenModel}`);
     body.model = chosenModel;   // override the model based on intent
   }
-// Stage 5: intent assembly (Path B — model-based, keyword fallback). LOG ONLY.
-  if (Array.isArray(messages)) {
+// Stage 5 + 6: intent assembly → per-fragment retrieval + routing (sequential)
+  if (Array.isArray(messages) && req.originalUrl.includes('/groq/')) {
     const latestUser = [...messages].reverse().find(m => m.role === 'user');
     const qText = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
     if (qText) {
       const groqKey = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
       const fetchFn = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
       const assembled = await assembleIntents(qText, groqKey, fetchFn);
-      console.log(`[assembly] method=${assembled.method} | ${assembled.fragments.length} intent(s)${assembled.isMulti ? ':' : ' (single)'}`);
-      if (assembled.isMulti) console.log(formatAssembly(assembled));
+      console.log(`[assembly] method=${assembled.method} | ${assembled.fragments.length} intent(s)`);
+
+      if (assembled.isMulti) {
+        console.log(formatAssembly(assembled));
+        const oldMessages = messages.slice(0, -2);
+        const t0 = Date.now();
+        const results = await orchestrate(assembled.fragments, oldMessages, groqKey, fetchFn);
+        results.forEach((r, i) =>
+          console.log(`[orchestrate] ${i + 1}/${results.length} [${r.intent}] → ${r.model} | ${r.ok ? 'ok' : 'FAILED'}`)
+        );
+        const combined = combineResults(results);
+        console.log(`[orchestrate] done in ${Date.now() - t0}ms — returning synthesized response`);
+        res.setHeader('X-CtxCrush-Orchestrated', String(results.length));
+        return res.json({
+          id: 'ctxcrush-orch-' + Date.now(),
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model: 'ctxcrush-multi',
+          choices: [{ index: 0, message: { role: 'assistant', content: combined }, finish_reason: 'stop' }],
+        });
+      }
     }
   }
   // Stage 4b: structured retrieval — inject relevant old context into the request
