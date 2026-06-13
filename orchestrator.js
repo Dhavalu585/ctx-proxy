@@ -62,6 +62,38 @@ async function orchestrate(fragments, oldMessages, apiKey, fetchFn) {
   return results;
 }
 
+// Stage 8: coherent merge — one model call synthesizes all fragment answers
+// into a single unified response. Falls back to combineResults if it fails.
+async function mergeResults(originalPrompt, results, apiKey, fetchFn) {
+  // Build the synthesis prompt from all the sub-answers
+  const parts = results
+    .map((r, i) => `Task ${i + 1} (${r.text}):\n${r.answer}`)
+    .join('\n\n');
+
+  const msgs = [
+    {
+      role: 'system',
+      content: `You are a synthesis engine. The user asked a multi-part question that was split into sub-tasks and answered separately. Combine the sub-answers into ONE coherent, well-organized response that flows naturally. Preserve all important details (code, facts, numbers). Remove redundancy. Do not mention that the question was split into tasks. Write as a single unified answer.`
+    },
+    {
+      role: 'user',
+      content: `Original question: "${originalPrompt}"\n\nSub-answers to merge:\n\n${parts}\n\nWrite the unified response:`
+    }
+  ];
+
+  try {
+    const resp = await fetchFn(GROQ_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', temperature: 0.4, messages: msgs }),
+    });
+    if (!resp.ok) return null;            // signal caller to use fallback
+    const data = await resp.json();
+    return data.choices?.[0]?.message?.content || null;
+  } catch (e) {
+    return null;                          // signal caller to use fallback
+  }
+}
 // Stage 6: simple labeled concatenation. Coherent merge = Stage 8.
 function combineResults(results) {
   return results
@@ -69,4 +101,4 @@ function combineResults(results) {
     .join('\n\n---\n\n');
 }
 
-module.exports = { orchestrate, combineResults, runFragment };
+module.exports = { orchestrate, combineResults, mergeResults, runFragment };

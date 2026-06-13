@@ -8,7 +8,7 @@ const { compressMessages, estimateTokens } = require('./compressor');
 const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
-const { orchestrate, combineResults } = require('./orchestrator');
+const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -333,7 +333,14 @@ async function handleRequest(req, res, upstreamURL) {
         results.forEach((r, i) =>
           console.log(`[orchestrate] ${i + 1}/${results.length} [${r.intent}] → ${r.model} | ${r.ok ? 'ok' : 'FAILED'}`)
         );
-        const combined = combineResults(results);
+        // Stage 8: try coherent merge; fall back to labeled concatenation
+        let combined = await mergeResults(qText, results, groqKey, fetchFn);
+        let mergeMethod = 'merged';
+        if (!combined) {
+          combined = combineResults(results);
+          mergeMethod = 'concatenated-fallback';
+        }
+        console.log(`[merge] ${mergeMethod}`);
         console.log(`[orchestrate] done in ${Date.now() - t0}ms — returning synthesized response`);
         res.setHeader('X-CtxCrush-Orchestrated', String(results.length));
         return res.json({
