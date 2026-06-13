@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const { validatePreservation } = require('./validate-preservation');
 const express  = require('express');
 const cors     = require('cors');
 const fetch    = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
@@ -383,6 +384,19 @@ async function handleRequest(req, res, upstreamURL) {
 
   // ── Compress ───────────────────────────────────────────────────────────────
   const { messages: compressed, stats: cStats } = compressMessages(messages, CFG);
+  // Content-preservation guard: if compression dropped anything critical
+  // (code, URLs, error types, numbers), skip compression for safety.
+  if (!cStats.skipped) {
+    const originalText = JSON.stringify(messages);
+    const compressedText = JSON.stringify(compressed);
+    const check = validatePreservation(originalText, compressedText);
+    if (!check.ok) {
+      console.log(`[preserve] ✗ critical content would be lost — using ORIGINAL. Missing:`,
+        JSON.stringify(check.missing));
+      return forward(req, res, upstreamURL, body);   // send original, uncompressed
+    }
+    console.log(`[preserve] ✓ all critical content intact`);
+  }
 
   if (cStats.skipped) {
     stats.skipped++;
