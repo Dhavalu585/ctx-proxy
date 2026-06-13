@@ -315,8 +315,11 @@ async function handleRequest(req, res, upstreamURL) {
     console.log(`[intent] ${intent} → [model] ${chosenModel}`);
     body.model = chosenModel;   // override the model based on intent
   }
-// Stage 5 + 6: intent assembly → per-fragment retrieval + routing (sequential)
-  if (Array.isArray(messages) && req.originalUrl.includes('/groq/')) {
+/// Stage 5–8 orchestration is now OPT-IN: only runs when the caller sends
+  // the header  X-CtxCrush-Orchestrate: true . Default behaviour = clean
+  // compression + routing (with token-savings stats).
+  const wantsOrchestration = (req.headers['x-ctxcrush-orchestrate'] || '').toLowerCase() === 'true';
+  if (wantsOrchestration && Array.isArray(messages) && req.originalUrl.includes('/groq/')) {
     const latestUser = [...messages].reverse().find(m => m.role === 'user');
     const qText = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
     if (qText) {
