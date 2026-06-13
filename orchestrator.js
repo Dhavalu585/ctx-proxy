@@ -52,13 +52,28 @@ async function runFragment(fragment, oldMessages, apiKey, fetchFn) {
   }
 }
 
-// Stage 7: run ALL fragments in PARALLEL.
-// Promise.all fires every fragment's model call at once and waits for all.
-// Results stay in the original fragment order (Promise.all preserves order).
+// Stage 7 + rate-limit safety: run fragments in parallel, but at most
+// CONCURRENCY at a time. Prevents 429 rate-limit errors on free tiers
+// while keeping most of the parallel speedup. Order is preserved.
+const CONCURRENCY = parseInt(process.env.ORCH_CONCURRENCY || '2', 10);
+
 async function orchestrate(fragments, oldMessages, apiKey, fetchFn) {
-  const results = await Promise.all(
-    fragments.map(f => runFragment(f, oldMessages, apiKey, fetchFn))
+  const results = new Array(fragments.length);
+  let next = 0;
+
+  async function runner() {
+    while (next < fragments.length) {
+      const i = next++;
+      results[i] = await runFragment(fragments[i], oldMessages, apiKey, fetchFn);
+    }
+  }
+
+  // Launch up to CONCURRENCY workers that pull fragments off a shared queue
+  const workers = Array.from(
+    { length: Math.min(CONCURRENCY, fragments.length) },
+    () => runner()
   );
+  await Promise.all(workers);
   return results;
 }
 
