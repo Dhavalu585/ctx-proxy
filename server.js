@@ -10,7 +10,7 @@ const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
-const { deriveSessionId, detectJavaCode, ingestCode } = require('./codestore');
+const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest } = require('./codestore');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -320,43 +320,64 @@ async function handleRequest(req, res, upstreamURL) {
   stats.requests++;
 
   // Allow the client to override the upstream target via header.
-  // This makes the proxy work with ANY OpenAI-compatible provider
-  // without needing a hardcoded route.
   const override = req.headers['x-upstream-url'];
   if (override) upstreamURL = override;
 
   const body = req.body;
-
-  // Pull out the messages array
   const messages = body.messages;
+
   // Stage 2 + 3: classify intent and route to the matching model
   if (Array.isArray(messages)) {
     const intent = classifyIntent(messages);
     const chosenModel = modelForIntent(intent);
     console.log(`[intent] ${intent} → [model] ${chosenModel}`);
-    body.model = chosenModel;   // override the model based on intent
+    body.model = chosenModel;
   }
-  // === Code parsing (Phase 2, LOG-ONLY) — observes, does NOT alter the request ===
+
+  // === Code parsing (Phase 2, LOG-ONLY) — scans ALL user messages for code ===
   if (Array.isArray(messages)) {
     try {
       const sessionId = deriveSessionId(messages);
-      // look at the most recent user message for code
-      const latestUser = [...messages].reverse().find(m => m.role === 'user');
-      const text = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
-      const detected = detectJavaCode(text);
-      if (detected) {
-        const result = await ingestCode(sessionId, detected.code);
-        const codeTokens = Math.round(detected.code.length / 4);
-        const refTokens = Math.round(result.reference.length / 4);
-        const pct = codeTokens > 0 ? Math.round((1 - refTokens / codeTokens) * 100) : 0;
-        console.log(`[codestore] session ${sessionId} | detected Java | ${result.indexed} methods indexed | would save ~${pct}% (${codeTokens}→${refTokens} tok)`);
-        console.log(`[codestore] functions: ${result.names}`);
+      for (const m of messages) {
+        if (m.role !== 'user') continue;
+        const text = typeof m.content === 'string' ? m.content : '';
+        const detected = detectJavaCode(text);
+        if (detected) {
+          const result = await ingestCode(sessionId, detected.code);
+          const codeTokens = Math.round(detected.code.length / 4);
+          const refTokens = Math.round(result.reference.length / 4);
+          const pct = codeTokens > 0 ? Math.round((1 - refTokens / codeTokens) * 100) : 0;
+          console.log(`[codestore] session ${sessionId} | detected Java | ${result.indexed} methods indexed | would save ~${pct}% (${codeTokens}→${refTokens} tok)`);
+          console.log(`[codestore] functions: ${result.names}`);
+        }
       }
     } catch (e) {
       console.log(`[codestore] skipped (${e.message})`);
     }
   }
-/// Stage 5–8 orchestration is now OPT-IN: only runs when the caller sends
+
+  // === Code recall (Phase 3, LOG-ONLY) — detects "show me X", logs what it would surface ===
+  if (Array.isArray(messages)) {
+    try {
+      const sessionId = deriveSessionId(messages);
+      const known = listFunctions(sessionId).filter(u => u.type === 'method').map(u => u.name);
+      if (known.length) {
+        const latestUser = [...messages].reverse().find(m => m.role === 'user');
+        const text = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
+        const wanted = detectRecallRequest(text, known);
+        if (wanted) {
+          const fn = recallFunction(sessionId, wanted);
+          if (fn) {
+            console.log(`[recall] session ${sessionId} | would surface "${fn.name}" (lines ${fn.startLine}-${fn.endLine}, ${fn.code.split('\n').length} lines)`);
+          }
+        }
+      }
+    } catch (e) {
+      console.log(`[recall] skipped (${e.message})`);
+    }
+  }
+
+  // Stage 5–8 orchestration is now OPT-IN: only runs when the caller sends
   // the header  X-CtxCrush-Orchestrate: true . Default behaviour = clean
   // compression + routing (with token-savings stats).
   const wantsOrchestration = (req.headers['x-ctxcrush-orchestrate'] || '').toLowerCase() === 'true';
@@ -377,7 +398,6 @@ async function handleRequest(req, res, upstreamURL) {
         results.forEach((r, i) =>
           console.log(`[orchestrate] ${i + 1}/${results.length} [${r.intent}] → ${r.model} | ${r.ok ? 'ok' : 'FAILED'}`)
         );
-        // Stage 8: try coherent merge; fall back to labeled concatenation
         let combined = await mergeResults(qText, results, groqKey, fetchFn);
         let mergeMethod = 'merged';
         if (!combined) {
@@ -397,6 +417,7 @@ async function handleRequest(req, res, upstreamURL) {
       }
     }
   }
+
   // Stage 4b: structured retrieval — inject relevant old context into the request
   if (Array.isArray(messages) && messages.length > 6) {
     const latestUser = [...messages].reverse().find(m => m.role === 'user');
@@ -418,14 +439,13 @@ async function handleRequest(req, res, upstreamURL) {
   }
 
   if (!Array.isArray(messages) || messages.length === 0) {
-    // Nothing to compress — pass straight through
     return forward(req, res, upstreamURL, body);
   }
 
   // ── Compress ───────────────────────────────────────────────────────────────
   const { messages: compressed, stats: cStats } = compressMessages(messages, CFG);
-  // Content-preservation guard: if compression dropped anything critical
-  // (code, URLs, error types, numbers), skip compression for safety.
+
+  // Content-preservation guard (only when PRESERVE_ENABLED)
   if (PRESERVE_ENABLED && !cStats.skipped) {
     const originalText = JSON.stringify(messages);
     const compressedText = JSON.stringify(compressed);
@@ -433,7 +453,7 @@ async function handleRequest(req, res, upstreamURL) {
     if (!check.ok) {
       console.log(`[preserve] ✗ critical content would be lost — using ORIGINAL. Missing:`,
         JSON.stringify(check.missing));
-      return forward(req, res, upstreamURL, body);   // send original, uncompressed
+      return forward(req, res, upstreamURL, body);
     }
     console.log(`[preserve] ✓ all critical content intact`);
   }
@@ -454,7 +474,6 @@ async function handleRequest(req, res, upstreamURL) {
     ` | ${cStats.compressionType}`
   );
 
-  // Send compression stats back via response header (optional, useful for debugging)
   res.setHeader('X-CtxCrush-Saved-Tokens',   String(cStats.tokensSaved));
   res.setHeader('X-CtxCrush-Saved-Pct',      String(cStats.percentSaved));
   res.setHeader('X-CtxCrush-Original-Msgs',  String(cStats.originalMsgCount));
@@ -463,7 +482,6 @@ async function handleRequest(req, res, upstreamURL) {
   const newBody = { ...body, messages: compressed };
   return forward(req, res, upstreamURL, newBody);
 }
-
 // ── Forward to real upstream (handles both streaming and JSON) ────────────────
 async function forward(req, res, upstreamURL, body) {
   // Build headers — forward auth, content-type, etc.

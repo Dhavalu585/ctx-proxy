@@ -1,5 +1,7 @@
 {
   "messages": [
-    { "role": "user", "content": "What's the capital of France?" }
+    { "role": "user", "content": "Review this Java class:\n```java\npublic class AccountService {\n    private double balance;\n    public double calculateInterest(double rate, int years) {\n        double result = balance;\n        for (int i = 0; i < years; i++) { result = result * (1 + rate); }\n        return result;\n    }\n    public boolean validateUser(String username, String token) {\n        if (username == null) return false;\n        return token.length() > 10;\n    }\n    public void deposit(double amount) { this.balance += amount; }\n}\n```" },
+    { "role": "assistant", "content": "Looks good, the class is well structured." },
+    { "role": "user", "content": "Show me the calculateInterest function again" }
   ]
 }

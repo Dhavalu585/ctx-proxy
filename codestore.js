@@ -50,7 +50,19 @@ async function ingestCode(sessionId, code) {
     names,
   };
 }
-
+// Detect whether a message is asking to recall a stored function.
+// Returns the function name to surface, or null.
+function detectRecallRequest(text, knownNames) {
+  if (typeof text !== 'string' || !Array.isArray(knownNames) || !knownNames.length) return null;
+  const recallVerb = /\b(show|view|see|pull up|display|recall|what does|how does|explain|method|function|code for)\b/i.test(text);
+  for (const name of knownNames) {
+    const re = new RegExp(`\\b${name.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\b`, 'i');
+    if (re.test(text)) {
+      if (recallVerb || text.toLowerCase().includes(name.toLowerCase())) return name;
+    }
+  }
+  return null;
+}
 function recallFunction(sessionId, name) {
   const sess = store.get(sessionId);
   if (!sess) return null;
@@ -62,4 +74,4 @@ function listFunctions(sessionId) {
   return sess ? [...sess.functions.values()] : [];
 }
 
-module.exports = { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, store };
+module.exports = { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, store };
