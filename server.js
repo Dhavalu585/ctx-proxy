@@ -10,6 +10,7 @@ const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
+const { deriveSessionId, detectJavaCode, ingestCode } = require('./codestore');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -334,6 +335,26 @@ async function handleRequest(req, res, upstreamURL) {
     const chosenModel = modelForIntent(intent);
     console.log(`[intent] ${intent} → [model] ${chosenModel}`);
     body.model = chosenModel;   // override the model based on intent
+  }
+  // === Code parsing (Phase 2, LOG-ONLY) — observes, does NOT alter the request ===
+  if (Array.isArray(messages)) {
+    try {
+      const sessionId = deriveSessionId(messages);
+      // look at the most recent user message for code
+      const latestUser = [...messages].reverse().find(m => m.role === 'user');
+      const text = latestUser ? (typeof latestUser.content === 'string' ? latestUser.content : '') : '';
+      const detected = detectJavaCode(text);
+      if (detected) {
+        const result = await ingestCode(sessionId, detected.code);
+        const codeTokens = Math.round(detected.code.length / 4);
+        const refTokens = Math.round(result.reference.length / 4);
+        const pct = codeTokens > 0 ? Math.round((1 - refTokens / codeTokens) * 100) : 0;
+        console.log(`[codestore] session ${sessionId} | detected Java | ${result.indexed} methods indexed | would save ~${pct}% (${codeTokens}→${refTokens} tok)`);
+        console.log(`[codestore] functions: ${result.names}`);
+      }
+    } catch (e) {
+      console.log(`[codestore] skipped (${e.message})`);
+    }
   }
 /// Stage 5–8 orchestration is now OPT-IN: only runs when the caller sends
   // the header  X-CtxCrush-Orchestrate: true . Default behaviour = clean
