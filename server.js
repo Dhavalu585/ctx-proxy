@@ -10,7 +10,7 @@ const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
-const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest } = require('./codestore');
+const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference } = require('./codestore');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -20,6 +20,8 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 // === Preservation switch — flip to true to enable content-preservation validation ===
 const PRESERVE_ENABLED = false;
+// === Code-replacement switch (Phase 2b) — flip to true to actually replace code with references ===
+const CODE_REPLACE_ENABLED = true;
 // ── Config from env (with sensible defaults) ─────────────────────────────────
 const CFG = {
   windowSize:            parseInt(process.env.WINDOW_SIZE   || '10'),
@@ -349,6 +351,20 @@ async function handleRequest(req, res, upstreamURL) {
           const pct = codeTokens > 0 ? Math.round((1 - refTokens / codeTokens) * 100) : 0;
           console.log(`[codestore] session ${sessionId} | detected Java | ${result.indexed} methods indexed | would save ~${pct}% (${codeTokens}→${refTokens} tok)`);
           console.log(`[codestore] functions: ${result.names}`);
+
+          // Phase 2b: replace code in OLDER messages only (keep the latest code intact)
+          const isLatestUserMsg = (m === [...messages].reverse().find(x => x.role === 'user'));
+          if (!isLatestUserMsg) {
+            const richRef = buildRichReference(sessionId, result.indexed);
+            if (CODE_REPLACE_ENABLED) {
+              m.content = replaceCodeWithReference(text, detected.code, richRef);
+              console.log(`[codereplace] ✓ replaced code in older message with signature reference (LIVE)`);
+            } else {
+              console.log(`[codereplace] would replace older message's code with reference (toggle OFF — log only)`);
+            }
+          } else {
+            console.log(`[codereplace] kept latest code message intact (never replace current code)`);
+          }
         }
       }
     } catch (e) {

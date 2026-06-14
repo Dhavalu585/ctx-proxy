@@ -29,9 +29,18 @@ async function parseJava(source) {
         const c = node.child(i);
         if (c.type === 'identifier') { name = c.text; break; }
       }
+      // Extract the signature (header up to the opening brace)
+      let signature = lines[node.startPosition.row].trim();
+      let sr = node.startPosition.row;
+      while (!signature.includes('{') && sr < node.endPosition.row) {
+        sr++; signature += ' ' + lines[sr].trim();
+      }
+      signature = signature.split('{')[0].trim();
+
       units.push({
         type: 'method',
         name,
+        signature,
         startLine: node.startPosition.row + 1,
         endLine: node.endPosition.row + 1,
         code: lines.slice(node.startPosition.row, node.endPosition.row + 1).join('\n'),

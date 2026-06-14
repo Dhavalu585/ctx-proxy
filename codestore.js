@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * CtxCrush — Session Code Store (Phase 2, LOG-ONLY wiring)
- * Holds parsed code functions per session so large code can later be replaced
- * with a compact reference (saving tokens) and recalled by name.
+ * CtxCrush — Session Code Store (Phase 2/2b/3)
+ * Holds parsed code functions per session so large code can be replaced with a
+ * compact reference (saving tokens) and recalled by name.
  *
  * HONEST LIMITATION: in-memory, session-scoped. Lost on restart, not shared
  * across instances. Fine for first version/demo; persistence needed for prod.
@@ -50,6 +50,7 @@ async function ingestCode(sessionId, code) {
     names,
   };
 }
+
 // Detect whether a message is asking to recall a stored function.
 // Returns the function name to surface, or null.
 function detectRecallRequest(text, knownNames) {
@@ -63,6 +64,7 @@ function detectRecallRequest(text, knownNames) {
   }
   return null;
 }
+
 function recallFunction(sessionId, name) {
   const sess = store.get(sessionId);
   if (!sess) return null;
@@ -74,4 +76,23 @@ function listFunctions(sessionId) {
   return sess ? [...sess.functions.values()] : [];
 }
 
-module.exports = { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, store };
+// Build a signature-rich reference (LLM keeps structural understanding)
+function buildRichReference(sessionId, fallbackCount) {
+  const units = listFunctions(sessionId);
+  const cls = units.find(u => u.type === 'class');
+  const methods = units.filter(u => u.type === 'method');
+  if (!methods.length) return `[CtxCrush: ${fallbackCount || 0} methods stored, recoverable by name]`;
+  let ref = `[CtxCrush: Java ${cls ? `class ${cls.name}` : 'code'} — ${methods.length} methods stored intact and recoverable:\n`;
+  for (const m of methods) ref += `  • ${m.signature || m.name}\n`;
+  ref += `Full source preserved; ask to view any method by name.]`;
+  return ref;
+}
+
+// Replace a detected code block in message text with the reference
+function replaceCodeWithReference(originalText, codeBlock, reference) {
+  const fencedRe = /```(?:java)?\s*[\s\S]*?```/i;
+  if (fencedRe.test(originalText)) return originalText.replace(fencedRe, reference);
+  return originalText.replace(codeBlock, reference);
+}
+
+module.exports = { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, store };
