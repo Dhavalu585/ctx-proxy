@@ -94,5 +94,11 @@ function replaceCodeWithReference(originalText, codeBlock, reference) {
   if (fencedRe.test(originalText)) return originalText.replace(fencedRe, reference);
   return originalText.replace(codeBlock, reference);
 }
-
-module.exports = { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, store };
+// Phase 3b: build a system message that injects a recalled function's code
+function buildRecallInjection(fn) {
+  return {
+    role: 'system',
+    content: `The developer is asking about the "${fn.name}" method. Here is its full source code (recovered from CtxCrush's code store):\n\`\`\`java\n${fn.code}\n\`\`\`\nUse this exact code to answer their question.`
+  };
+}
+module.exports = { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection, store };

@@ -10,7 +10,7 @@ const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
-const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference } = require('./codestore');
+const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -22,6 +22,8 @@ app.use(express.json({ limit: '10mb' }));
 const PRESERVE_ENABLED = false;
 // === Code-replacement switch (Phase 2b) — flip to true to actually replace code with references ===
 const CODE_REPLACE_ENABLED = true;
+// === Code-recall switch (Phase 3b) — flip to true to inject recalled code into context ===
+const CODE_RECALL_ENABLED = true;
 // ── Config from env (with sensible defaults) ─────────────────────────────────
 const CFG = {
   windowSize:            parseInt(process.env.WINDOW_SIZE   || '10'),
@@ -327,6 +329,7 @@ async function handleRequest(req, res, upstreamURL) {
 
   const body = req.body;
   const messages = body.messages;
+  const codeSessionId = Array.isArray(messages) ? deriveSessionId(messages) : 'nosession';
 
   // Stage 2 + 3: classify intent and route to the matching model
   if (Array.isArray(messages)) {
@@ -339,7 +342,7 @@ async function handleRequest(req, res, upstreamURL) {
   // === Code parsing (Phase 2, LOG-ONLY) — scans ALL user messages for code ===
   if (Array.isArray(messages)) {
     try {
-      const sessionId = deriveSessionId(messages);
+      const sessionId = codeSessionId;
       for (const m of messages) {
         if (m.role !== 'user') continue;
         const text = typeof m.content === 'string' ? m.content : '';
@@ -375,7 +378,7 @@ async function handleRequest(req, res, upstreamURL) {
   // === Code recall (Phase 3, LOG-ONLY) — detects "show me X", logs what it would surface ===
   if (Array.isArray(messages)) {
     try {
-      const sessionId = deriveSessionId(messages);
+      const sessionId = codeSessionId;
       const known = listFunctions(sessionId).filter(u => u.type === 'method').map(u => u.name);
       if (known.length) {
         const latestUser = [...messages].reverse().find(m => m.role === 'user');
@@ -384,7 +387,14 @@ async function handleRequest(req, res, upstreamURL) {
         if (wanted) {
           const fn = recallFunction(sessionId, wanted);
           if (fn) {
-            console.log(`[recall] session ${sessionId} | would surface "${fn.name}" (lines ${fn.startLine}-${fn.endLine}, ${fn.code.split('\n').length} lines)`);
+            if (CODE_RECALL_ENABLED) {
+              const injection = buildRecallInjection(fn);
+              const arr = body.messages;
+              body.messages = [...arr.slice(0, -1), injection, arr[arr.length - 1]];
+              console.log(`[recall] ✓ surfaced "${fn.name}" code into context (LIVE, ${fn.code.split('\n').length} lines)`);
+            } else {
+              console.log(`[recall] would surface "${fn.name}" (lines ${fn.startLine}-${fn.endLine}, ${fn.code.split('\n').length} lines) — toggle OFF`);
+            }
           }
         }
       }

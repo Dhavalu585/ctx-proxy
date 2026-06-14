@@ -1,7 +1,7 @@
 {
   "messages": [
-    { "role": "user", "content": "Review this Java class:\n```java\npublic class AccountService {\n    private double balance;\n    public double calculateInterest(double rate, int years) {\n        double result = balance;\n        for (int i = 0; i < years; i++) { result = result * (1 + rate); }\n        return result;\n    }\n    public boolean validateUser(String username, String token) {\n        if (username == null) return false;\n        return token.length() > 10;\n    }\n    public void deposit(double amount) { this.balance += amount; }\n}\n```" },
-    { "role": "assistant", "content": "Reviewed — the class looks well structured." },
-    { "role": "user", "content": "What does this class do overall?" }
+    { "role": "user", "content": "Review this:\n```java\npublic class AccountService {\n    public double calculateInterest(double rate, int years) {\n        double result = balance;\n        for (int i = 0; i < years; i++) { result = result * (1 + rate); }\n        return result;\n    }\n    public void deposit(double amount) { this.balance += amount; }\n}\n```" },
+    { "role": "assistant", "content": "Reviewed." },
+    { "role": "user", "content": "Show me the calculateInterest function" }
   ]
 }
