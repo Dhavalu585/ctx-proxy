@@ -77,7 +77,7 @@ app.get('/test', (req, res) => {
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap');
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :root{--bg:#09090b;--bg2:#111113;--bg3:#1a1a1f;--border:#27272f;--accent:#7c6aff;--accent2:#a78bfa;--green:#34d399;--red:#f87171;--text:#f4f0ff;--muted:#6b6880;--dim:#3a3848}
-  body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;min-height:100vh;display:grid;grid-template-columns:280px 1fr;grid-template-rows:56px 1fr;grid-template-areas:"header header" "sidebar main"}
+  body{background:var(--bg);color:var(--text);font-family:'Syne',sans-serif;height:100vh;overflow:hidden;display:grid;grid-template-columns:280px 1fr;grid-template-rows:56px 1fr;grid-template-areas:"header header" "sidebar main"}
   header{grid-area:header;background:var(--bg2);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 24px;gap:12px}
   .logo{display:flex;align-items:center;gap:9px;font-size:17px;font-weight:800;letter-spacing:-.5px}
   .logo-icon{width:28px;height:28px;background:var(--accent);border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px}
@@ -128,7 +128,7 @@ app.get('/test', (req, res) => {
   #sbtn:hover{opacity:.85} #sbtn:disabled{opacity:.35;cursor:not-allowed}
   .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;text-align:center}
   .ei{font-size:38px;margin-bottom:4px}
-  #savings-banner{margin:14px 22px 0;padding:16px 20px;border-radius:14px;background:linear-gradient(135deg,rgba(52,211,153,.14),rgba(124,106,255,.12));border:1px solid rgba(52,211,153,.35);text-align:center;animation:fu .3s ease}
+  #savings-banner{position:sticky;top:0;z-index:5;margin:14px 22px 0;padding:14px 20px;border-radius:14px;background:linear-gradient(135deg,rgba(52,211,153,.16),rgba(124,106,255,.14));border:1px solid rgba(52,211,153,.35);text-align:center;animation:fu .3s ease;backdrop-filter:blur(8px)}
   .sb-big{font-size:24px;font-weight:800;letter-spacing:-.5px;color:var(--green)}
   .sb-big span{color:var(--green)}
   .sb-sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-top:5px}
