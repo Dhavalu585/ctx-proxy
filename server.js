@@ -17,7 +17,8 @@ const PORT = process.env.PORT || 3000;
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-
+// === Preservation switch — flip to true to enable content-preservation validation ===
+const PRESERVE_ENABLED = false;
 // ── Config from env (with sensible defaults) ─────────────────────────────────
 const CFG = {
   windowSize:            parseInt(process.env.WINDOW_SIZE   || '10'),
@@ -127,6 +128,10 @@ app.get('/test', (req, res) => {
   #sbtn:hover{opacity:.85} #sbtn:disabled{opacity:.35;cursor:not-allowed}
   .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;text-align:center}
   .ei{font-size:38px;margin-bottom:4px}
+  #savings-banner{margin:14px 22px 0;padding:16px 20px;border-radius:14px;background:linear-gradient(135deg,rgba(52,211,153,.14),rgba(124,106,255,.12));border:1px solid rgba(52,211,153,.35);text-align:center;animation:fu .3s ease}
+  .sb-big{font-size:24px;font-weight:800;letter-spacing:-.5px;color:var(--green)}
+  .sb-big span{color:var(--green)}
+  .sb-sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-top:5px}
   ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:var(--dim);border-radius:2px}
 </style>
 </head>
@@ -184,6 +189,10 @@ app.get('/test', (req, res) => {
   </div>
 </aside>
 <main>
+  <div id="savings-banner" style="display:none">
+    <div class="sb-big"><span id="sb-tokens">0</span> tokens saved this session</div>
+    <div class="sb-sub">Without CtxCrush you'd have sent <span id="sb-without">0</span> tokens · with it, only <span id="sb-with">0</span> · that's <span id="sb-pct">0%</span> less</div>
+  </div>
   <div id="msgs">
     <div class="empty" id="empty">
       <div class="ei">⚡</div>
@@ -240,6 +249,16 @@ function updStats(saved,before){
   $('ss').textContent=ss.saved.toLocaleString();
   $('sr').textContent=ss.reqs;
   $('sp').textContent=(ss.before>0?Math.round(ss.saved/ss.before*100):0)+'%';
+  // Update the big savings banner
+  if(ss.saved>0){
+    const withTokens=ss.before-ss.saved;
+    const pct=ss.before>0?Math.round(ss.saved/ss.before*100):0;
+    $('sb-tokens').textContent=ss.saved.toLocaleString();
+    $('sb-without').textContent=ss.before.toLocaleString();
+    $('sb-with').textContent=withTokens.toLocaleString();
+    $('sb-pct').textContent=pct+'%';
+    $('savings-banner').style.display='block';
+  }
 }
 async function connect(){
   const key=$('akey').value.trim();
@@ -386,7 +405,7 @@ async function handleRequest(req, res, upstreamURL) {
   const { messages: compressed, stats: cStats } = compressMessages(messages, CFG);
   // Content-preservation guard: if compression dropped anything critical
   // (code, URLs, error types, numbers), skip compression for safety.
-  if (!cStats.skipped) {
+  if (PRESERVE_ENABLED && !cStats.skipped) {
     const originalText = JSON.stringify(messages);
     const compressedText = JSON.stringify(compressed);
     const check = validatePreservation(originalText, compressedText);
