@@ -1,6 +1,7 @@
 'use strict';
 
 require('dotenv').config();
+const { extractFacts } = require('./factsnap');
 const { validatePreservation } = require('./validate-preservation');
 const express  = require('express');
 const cors     = require('cors');
@@ -13,6 +14,7 @@ const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
 const app  = express();
 const PORT = process.env.PORT || 3000;
+
 
 
 // ── Middleware ───────────────────────────────────────────────────────────────
@@ -419,7 +421,29 @@ async function handleRequest(req, res, upstreamURL) {
       console.log(`[recall] skipped (${e.message})`);
     }
   }
-
+// === Fact Snapshot (Phase 1, LOG-ONLY) — extract critical facts, observe only ===
+  if (Array.isArray(messages)) {
+    try {
+      const snapshot = {};
+      let factCount = 0;
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
+        if (m.role !== 'user') continue;
+        const text = typeof m.content === 'string' ? m.content : '';
+        const facts = extractFacts(text);
+        if (facts) {
+          snapshot[`msg${i}`] = facts;
+          factCount += Object.values(facts).reduce((s, arr) => s + arr.length, 0);
+        }
+      }
+      if (factCount > 0) {
+        console.log(`[factsnap] extracted ${factCount} facts across ${Object.keys(snapshot).length} messages`);
+        console.log(`[factsnap] snapshot: ${JSON.stringify(snapshot)}`);
+      }
+    } catch (e) {
+      console.log(`[factsnap] skipped (${e.message})`);
+    }
+  }
   // Stage 5–8 orchestration is now OPT-IN: only runs when the caller sends
   // the header  X-CtxCrush-Orchestrate: true . Default behaviour = clean
   // compression + routing (with token-savings stats).
