@@ -343,6 +343,7 @@ async function handleRequest(req, res, upstreamURL) {
   if (Array.isArray(messages)) {
     try {
       const sessionId = codeSessionId;
+      let codeSavedThisTurn = 0;
       for (const m of messages) {
         if (m.role !== 'user') continue;
         const text = typeof m.content === 'string' ? m.content : '';
