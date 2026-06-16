@@ -1,7 +1,7 @@
 'use strict';
 
 require('dotenv').config();
-const { extractFacts } = require('./factsnap');
+const { extractFacts, buildFactsReference } = require('./factsnap');
 const { validatePreservation } = require('./validate-preservation');
 const express  = require('express');
 const cors     = require('cors');
@@ -26,6 +26,8 @@ const PRESERVE_ENABLED = false;
 const CODE_REPLACE_ENABLED = true;
 // === Code-recall switch (Phase 3b) — flip to true to inject recalled code into context ===
 const CODE_RECALL_ENABLED = true;
+// === Fact-injection switch (Phase 3) — flip to true to inject preserved facts into context ===
+const FACT_INJECT_ENABLED = true;
 // ── Config from env (with sensible defaults) ─────────────────────────────────
 const CFG = {
   windowSize:            parseInt(process.env.WINDOW_SIZE   || '10'),
@@ -103,12 +105,12 @@ app.get('/test', (req, res) => {
   .btn:hover{opacity:.85}
   .btn.sec{background:var(--bg3);border:1px solid var(--border);color:var(--muted)}
   .btn.sec:hover{color:var(--text)}
-  .sgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-  .sc{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 10px}
-  .sc.w{grid-column:1/-1;border-color:rgba(124,106,255,.3);background:rgba(124,106,255,.06)}
-  .sl{font-family:'IBM Plex Mono',monospace;font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
-  .sv{font-size:19px;font-weight:800;letter-spacing:-1px;line-height:1}
-  .sv.g{color:var(--green)} .sv.a{color:var(--accent2)}
+  .modebox{background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:11px 12px;margin-top:4px}
+  .moderow{display:flex;align-items:center;gap:9px;cursor:pointer}
+  .moderow input{width:auto;margin:0;cursor:pointer;accent-color:var(--accent)}
+  .modetitle{font-size:12px;font-weight:700;color:var(--text)}
+  .modenote{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--muted);line-height:1.6;margin-top:8px}
+  .modenote b{color:var(--accent2)}
   main{grid-area:main;display:flex;flex-direction:column;overflow:hidden}
   #msgs{flex:1;overflow-y:auto;padding:22px 26px;display:flex;flex-direction:column;gap:16px;scroll-behavior:smooth}
   .msg{max-width:72%;display:flex;flex-direction:column;gap:3px;animation:fu .22s ease}
@@ -135,10 +137,9 @@ app.get('/test', (req, res) => {
   #sbtn:hover{opacity:.85} #sbtn:disabled{opacity:.35;cursor:not-allowed}
   .empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px;text-align:center}
   .ei{font-size:38px;margin-bottom:4px}
-  #savings-banner{position:sticky;top:0;z-index:5;margin:14px 22px 0;padding:14px 20px;border-radius:14px;background:linear-gradient(135deg,rgba(52,211,153,.16),rgba(124,106,255,.14));border:1px solid rgba(52,211,153,.35);text-align:center;animation:fu .3s ease;backdrop-filter:blur(8px)}
-  .sb-big{font-size:24px;font-weight:800;letter-spacing:-.5px;color:var(--green)}
+  #savings-banner{position:sticky;top:0;z-index:5;margin:14px 22px 0;padding:16px 20px;border-radius:14px;background:linear-gradient(135deg,rgba(52,211,153,.16),rgba(124,106,255,.14));border:1px solid rgba(52,211,153,.35);text-align:center;animation:fu .3s ease;backdrop-filter:blur(8px)}
+  .sb-big{font-size:26px;font-weight:800;letter-spacing:-.5px;color:var(--green)}
   .sb-big span{color:var(--green)}
-  .sb-sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-top:5px}
   .codebanner{margin:10px 22px 0;padding:8px 14px;border-radius:10px;background:rgba(124,106,255,.08);border:1px solid rgba(124,106,255,.25);font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--accent2);text-align:center}
   ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:var(--dim);border-radius:2px}
 </style>
@@ -188,24 +189,27 @@ app.get('/test', (req, res) => {
     <button class="btn sec" onclick="clearChat()">Clear Chat</button>
   </div>
   <div>
-    <div class="slbl">Session Stats</div>
-    <div class="sgrid">
-      <div class="sc w"><div class="sl">Tokens saved</div><div class="sv g" id="ss">0</div></div>
-      <div class="sc"><div class="sl">Requests</div><div class="sv a" id="sr">0</div></div>
-      <div class="sc"><div class="sl">Avg saved</div><div class="sv" id="sp">0%</div></div>
+    <div class="slbl">Mode</div>
+    <div class="modebox">
+      <label class="moderow">
+        <input type="checkbox" id="maxsave" onchange="onModeChange()">
+        <span class="modetitle">⚡ Quick &amp; Cheap</span>
+      </label>
+      <div class="modenote" id="modenote">
+        <b>Smart mode (default):</b> automatically preserves important facts and handles code. Best for work you'll build on.
+      </div>
     </div>
   </div>
 </aside>
 <main>
    <div id="savings-banner" style="display:none">
     <div class="sb-big"><span id="sb-tokens">0</span> tokens saved this session</div>
-    <div class="sb-sub" id="sb-breakdown"></div>
   </div>
   <div class="codebanner">☕ Java code: compressed &amp; recallable to save tokens · other languages in progress</div>
   <div id="msgs">
     <div class="empty" id="empty">
       <div class="ei">⚡</div>
-      <div>Enter your OpenAI API key<br>and click <strong>Connect</strong></div>
+      <div>Enter your API key<br>and click <strong>Connect</strong></div>
     </div>
   </div>
   <div class="ibar">
@@ -216,7 +220,7 @@ app.get('/test', (req, res) => {
 </main>
 <script>
 const PROXY = '${proxyBase}';
-let hist=[], conn=false, ss={saved:0,reqs:0,before:0,code:0};
+let hist=[], conn=false, ss={total:0,reqs:0};
 const $=id=>document.getElementById(id);
 const PROVIDERS={
   groq:       {path:'/groq/v1/chat/completions',       keyPrefix:'gsk_...', hint:'Free key at console.groq.com',  models:['llama-3.3-70b-versatile','llama-3.1-8b-instant']},
@@ -233,6 +237,12 @@ function onProvChange(){
   if(p.models.length) $('mdl').value=p.models[0];
   $('baseurl-field').style.display = pv==='custom' ? 'flex' : 'none';
   setConn(false);
+}
+function onModeChange(){
+  const on=$('maxsave').checked;
+  $('modenote').innerHTML = on
+    ? "<b>Quick &amp; Cheap (on):</b> maximum token savings. Best for one-off questions (FIFA scores, quick lookups, places to visit)."
+    : "<b>Smart mode (default):</b> automatically preserves important facts and handles code. Best for work you'll build on.";
 }
 function setConn(on){$('dot').className='dot'+(on?' on':'');conn=on;$('sbtn').disabled=!on}
 function ar(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,150)+'px'}
@@ -253,22 +263,13 @@ function addTyping(){
   $('msgs').appendChild(w);$('msgs').scrollTop=$('msgs').scrollHeight;
 }
 function rmTyping(){$('typing')?.remove()}
-function updStats(saved,before,codeSaved){
-  codeSaved=codeSaved||0;
-  ss.saved+=saved;ss.reqs++;ss.before+=before;ss.code+=codeSaved;
-  const total=ss.saved+ss.code;
-  $('ss').textContent=total.toLocaleString();
-  $('sr').textContent=ss.reqs;
-  $('sp').textContent=(ss.before>0?Math.round(ss.saved/ss.before*100):0)+'%';
-  if(total>0){
-    $('sb-tokens').textContent=total.toLocaleString();
+function updStats(turnSaved){
+  // turnSaved = the REAL net tokens saved this request (compression + code, already net of any facts cost)
+  ss.total += turnSaved;
+  ss.reqs++;
+  if(ss.total>0){
+    $('sb-tokens').textContent=ss.total.toLocaleString();
     $('savings-banner').style.display='block';
-    const bd=$('sb-breakdown');
-    if(bd){
-      bd.textContent = ss.code>0
-        ? 'Conversation '+ss.saved.toLocaleString()+' · Code '+ss.code.toLocaleString()
-        : '';
-    }
   }
 }
 async function connect(){
@@ -289,6 +290,7 @@ async function send(){
   const key=$('akey').value.trim(),model=$('mdl').value.trim();
   const pv=$('prov').value, endpoint=PROVIDERS[pv].path;
   const headers={'Content-Type':'application/json','Authorization':'Bearer '+key};
+  if($('maxsave').checked) headers['X-CtxCrush-Max-Savings']='true';
   if(pv==='custom'){
     const bu=$('baseurl').value.trim();
     if(!bu){addMsg('system','✗ Please enter a Base URL for the custom provider');return}
@@ -311,18 +313,18 @@ async function send(){
     const pct=parseInt(r.headers.get('X-CtxCrush-Saved-Pct')||'0');
     const om=parseInt(r.headers.get('X-CtxCrush-Original-Msgs')||'0');
     const cm=parseInt(r.headers.get('X-CtxCrush-Compressed-Msgs')||'0');
+    const turnSaved = saved + codeSaved;
     let badgeLabel=null;
-    if(saved>0 && codeSaved>0) badgeLabel='⚡ '+saved+' conv + '+codeSaved+' code tokens saved';
+    if(saved>0 && codeSaved>0) badgeLabel='⚡ '+turnSaved+' tokens saved this turn';
     else if(saved>0) badgeLabel='⚡ '+saved+' tokens saved ('+pct+'%) · '+om+'→'+cm+' msgs';
     else if(codeSaved>0) badgeLabel='☕ '+codeSaved+' code tokens saved (not re-sending stored code)';
     const badge=badgeLabel?{t:'s',l:badgeLabel}:null;
     addMsg('assistant',reply,badge);hist.push({role:'assistant',content:reply});
-    const b=Math.ceil(hist.slice(0,-1).reduce((s,m)=>s+m.content.length,0)/4);
-    if(saved>0||codeSaved>0){updStats(saved,b,codeSaved)}
+    if(turnSaved>0){updStats(turnSaved)}
   }catch(e){rmTyping();addMsg('system','✗ '+e.message);hist.pop()}
   finally{$('sbtn').disabled=false;inp.focus()}
 }
-function clearChat(){hist=[];ss={saved:0,reqs:0,before:0,code:0};$('msgs').innerHTML='<div class="empty" id="empty"><div class="ei">⚡</div><div>Chat cleared.</div></div>'}
+function clearChat(){hist=[];ss={total:0,reqs:0};$('sb-tokens').textContent='0';$('savings-banner').style.display='none';$('msgs').innerHTML='<div class="empty" id="empty"><div class="ei">⚡</div><div>Chat cleared.</div></div>'}
 </script>
 </body>
 </html>`);
@@ -338,16 +340,19 @@ async function handleRequest(req, res, upstreamURL) {
   const override = req.headers['x-upstream-url'];
   if (override) upstreamURL = override;
 
+  // Quick & Cheap mode: caller asked for max savings — skip fact-preservation
+  const maxSavings = (req.headers['x-ctxcrush-max-savings'] || '').toLowerCase() === 'true';
+
   const body = req.body;
   const messages = body.messages;
   const codeSessionId = Array.isArray(messages) ? deriveSessionId(messages) : 'nosession';
   let totalCodeSaved = 0;
-
+  let factsInjection = null;
   // Stage 2 + 3: classify intent and route to the matching model
   if (Array.isArray(messages)) {
     const intent = classifyIntent(messages);
     const chosenModel = modelForIntent(intent);
-    console.log(`[intent] ${intent} → [model] ${chosenModel}`);
+    console.log(`[intent] ${intent} → [model] ${chosenModel}${maxSavings ? ' | mode: Quick & Cheap' : ''}`);
     body.model = chosenModel;
   }
 
@@ -421,7 +426,8 @@ async function handleRequest(req, res, upstreamURL) {
       console.log(`[recall] skipped (${e.message})`);
     }
   }
-// === Fact Snapshot (Phase 1, LOG-ONLY) — extract critical facts, observe only ===
+
+  // === Fact Snapshot (Phase 3) — extract critical facts; inject unless Quick & Cheap mode ===
   if (Array.isArray(messages)) {
     try {
       const snapshot = {};
@@ -438,12 +444,24 @@ async function handleRequest(req, res, upstreamURL) {
       }
       if (factCount > 0) {
         console.log(`[factsnap] extracted ${factCount} facts across ${Object.keys(snapshot).length} messages`);
-        console.log(`[factsnap] snapshot: ${JSON.stringify(snapshot)}`);
+        const factsRef = buildFactsReference(snapshot);
+        if (maxSavings) {
+          console.log(`[factsnap] Quick & Cheap mode — skipping fact injection (max savings)`);
+        } else if (factsRef && FACT_INJECT_ENABLED && messages.length > 6) {
+          factsInjection = {
+            role: 'system',
+            content: `Verified facts from earlier in this conversation (treat as authoritative; do not deny these were mentioned):\n${factsRef}`
+          };
+          console.log(`[factsnap] facts reference ready (~${Math.round(factsRef.length / 4)} tokens) — will inject after compression`);
+        } else {
+          console.log(`[factsnap] snapshot built (~${factsRef ? Math.round(factsRef.length / 4) : 0} tok ref) — injection ${FACT_INJECT_ENABLED ? 'waiting for >6 msgs' : 'toggle OFF'}`);
+        }
       }
     } catch (e) {
       console.log(`[factsnap] skipped (${e.message})`);
     }
   }
+
   // Stage 5–8 orchestration is now OPT-IN: only runs when the caller sends
   // the header  X-CtxCrush-Orchestrate: true . Default behaviour = clean
   // compression + routing (with token-savings stats).
@@ -531,6 +549,11 @@ async function handleRequest(req, res, upstreamURL) {
     stats.skipped++;
     res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
     console.log(`[CtxCrush] SKIP  ${cStats.reason} | ${messages.length} msgs | code saved ${totalCodeSaved}`);
+    if (factsInjection) {
+      const arr = body.messages;
+      body.messages = [...arr.slice(0, -1), factsInjection, arr[arr.length - 1]];
+      console.log(`[factsnap] ✓ injected facts into FINAL context (skip path)`);
+    }
     return forward(req, res, upstreamURL, body);
   }
 
@@ -551,7 +574,12 @@ async function handleRequest(req, res, upstreamURL) {
   res.setHeader('X-CtxCrush-Compressed-Msgs',   String(cStats.compressedMsgCount));
   res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
 
-  const newBody = { ...body, messages: compressed };
+  let finalMessages = compressed;
+  if (factsInjection) {
+    finalMessages = [...compressed.slice(0, -1), factsInjection, compressed[compressed.length - 1]];
+    console.log(`[factsnap] ✓ injected facts into FINAL context (after compression)`);
+  }
+  const newBody = { ...body, messages: finalMessages };
   return forward(req, res, upstreamURL, newBody);
 }
 

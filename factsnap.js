@@ -79,5 +79,22 @@ function extractFacts(text) {
   const total = Object.values(facts).reduce((s, arr) => s + arr.length, 0);
   return total > 0 ? facts : null;
 }
-
-module.exports = { extractFacts };
+// Build a compact facts-reference from an accumulated snapshot (per-session)
+function buildFactsReference(snapshot) {
+  const all = { dates: new Set(), amounts: new Set(), entities: new Set(), figures: new Set(), times: new Set(), decisions: new Set() };
+  for (const key of Object.keys(snapshot)) {
+    const f = snapshot[key];
+    for (const cat of Object.keys(all)) {
+      (f[cat] || []).forEach(v => all[cat].add(v));
+    }
+  }
+  const parts = [];
+  if (all.dates.size)     parts.push(`Dates: ${[...all.dates].join('; ')}`);
+  if (all.amounts.size)   parts.push(`Amounts: ${[...all.amounts].join('; ')}`);
+  if (all.entities.size)  parts.push(`Names/Places: ${[...all.entities].join('; ')}`);
+  if (all.figures.size)   parts.push(`Figures: ${[...all.figures].join('; ')}`);
+  if (all.times.size)     parts.push(`Times: ${[...all.times].join('; ')}`);
+  if (all.decisions.size) parts.push(`Key statements: ${[...all.decisions].join(' | ')}`);
+  return parts.length ? parts.join('\n') : null;
+}
+module.exports = { extractFacts, buildFactsReference };
