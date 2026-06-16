@@ -137,6 +137,7 @@ app.get('/test', (req, res) => {
   .sb-big{font-size:24px;font-weight:800;letter-spacing:-.5px;color:var(--green)}
   .sb-big span{color:var(--green)}
   .sb-sub{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);margin-top:5px}
+  .codebanner{margin:10px 22px 0;padding:8px 14px;border-radius:10px;background:rgba(124,106,255,.08);border:1px solid rgba(124,106,255,.25);font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--accent2);text-align:center}
   ::-webkit-scrollbar{width:4px} ::-webkit-scrollbar-thumb{background:var(--dim);border-radius:2px}
 </style>
 </head>
@@ -197,7 +198,9 @@ app.get('/test', (req, res) => {
   <div id="savings-banner" style="display:none">
     <div class="sb-big"><span id="sb-tokens">0</span> tokens saved this session</div>
     <div class="sb-sub">Without CtxCrush you'd have sent <span id="sb-without">0</span> tokens · with it, only <span id="sb-with">0</span> · that's <span id="sb-pct">0%</span> less</div>
+    <div class="sb-sub" id="sb-breakdown" style="margin-top:3px;color:var(--accent2)"></div>
   </div>
+  <div class="codebanner">☕ Java code: compressed &amp; recallable to save tokens · other languages in progress</div>
   <div id="msgs">
     <div class="empty" id="empty">
       <div class="ei">⚡</div>
@@ -212,7 +215,7 @@ app.get('/test', (req, res) => {
 </main>
 <script>
 const PROXY = '${proxyBase}';
-let hist=[], conn=false, ss={saved:0,reqs:0,before:0};
+let hist=[], conn=false, ss={saved:0,reqs:0,before:0,code:0};
 const $=id=>document.getElementById(id);
 const PROVIDERS={
   groq:       {path:'/groq/v1/chat/completions',       keyPrefix:'gsk_...', hint:'Free key at console.groq.com',  models:['llama-3.3-70b-versatile','llama-3.1-8b-instant']},
@@ -249,20 +252,29 @@ function addTyping(){
   $('msgs').appendChild(w);$('msgs').scrollTop=$('msgs').scrollHeight;
 }
 function rmTyping(){$('typing')?.remove()}
-function updStats(saved,before){
-  ss.saved+=saved;ss.reqs++;ss.before+=before;
-  $('ss').textContent=ss.saved.toLocaleString();
+function updStats(saved,before,codeSaved){
+  codeSaved=codeSaved||0;
+  ss.saved+=saved;ss.reqs++;ss.before+=before;ss.code+=codeSaved;
+  const total=ss.saved+ss.code;
+  $('ss').textContent=total.toLocaleString();
   $('sr').textContent=ss.reqs;
   $('sp').textContent=(ss.before>0?Math.round(ss.saved/ss.before*100):0)+'%';
-  // Update the big savings banner
-  if(ss.saved>0){
+  if(total>0){
     const withTokens=ss.before-ss.saved;
     const pct=ss.before>0?Math.round(ss.saved/ss.before*100):0;
-    $('sb-tokens').textContent=ss.saved.toLocaleString();
+    $('sb-tokens').textContent=total.toLocaleString();
     $('sb-without').textContent=ss.before.toLocaleString();
     $('sb-with').textContent=withTokens.toLocaleString();
     $('sb-pct').textContent=pct+'%';
     $('savings-banner').style.display='block';
+    const bd=$('sb-breakdown');
+    if(bd){
+      if(ss.code>0){
+        bd.textContent='Conversation: '+ss.saved.toLocaleString()+' · Code (not re-sending stored code): '+ss.code.toLocaleString();
+      } else {
+        bd.textContent='';
+      }
+    }
   }
 }
 async function connect(){
@@ -301,16 +313,22 @@ async function send(){
     const d=await r.json();
     const reply=d.choices?.[0]?.message?.content||'(empty)';
     const saved=parseInt(r.headers.get('X-CtxCrush-Saved-Tokens')||'0');
+    const codeSaved=parseInt(r.headers.get('X-CtxCrush-Code-Saved-Tokens')||'0');
     const pct=parseInt(r.headers.get('X-CtxCrush-Saved-Pct')||'0');
     const om=parseInt(r.headers.get('X-CtxCrush-Original-Msgs')||'0');
     const cm=parseInt(r.headers.get('X-CtxCrush-Compressed-Msgs')||'0');
-    const badge=saved>0?{t:'s',l:'⚡ '+saved+' tokens saved ('+pct+'%) · '+om+'→'+cm+' msgs'}:null;
+    let badgeLabel=null;
+    if(saved>0 && codeSaved>0) badgeLabel='⚡ '+saved+' conv + '+codeSaved+' code tokens saved';
+    else if(saved>0) badgeLabel='⚡ '+saved+' tokens saved ('+pct+'%) · '+om+'→'+cm+' msgs';
+    else if(codeSaved>0) badgeLabel='☕ '+codeSaved+' code tokens saved (not re-sending stored code)';
+    const badge=badgeLabel?{t:'s',l:badgeLabel}:null;
     addMsg('assistant',reply,badge);hist.push({role:'assistant',content:reply});
-    if(saved>0){const b=Math.ceil(hist.slice(0,-1).reduce((s,m)=>s+m.content.length,0)/4);updStats(saved,b)}
+    const b=Math.ceil(hist.slice(0,-1).reduce((s,m)=>s+m.content.length,0)/4);
+    if(saved>0||codeSaved>0){updStats(saved,b,codeSaved)}
   }catch(e){rmTyping();addMsg('system','✗ '+e.message);hist.pop()}
   finally{$('sbtn').disabled=false;inp.focus()}
 }
-function clearChat(){hist=[];$('msgs').innerHTML='<div class="empty" id="empty"><div class="ei">⚡</div><div>Chat cleared.</div></div>'}
+function clearChat(){hist=[];ss={saved:0,reqs:0,before:0,code:0};$('msgs').innerHTML='<div class="empty" id="empty"><div class="ei">⚡</div><div>Chat cleared.</div></div>'}
 </script>
 </body>
 </html>`);
@@ -319,7 +337,6 @@ function clearChat(){hist=[];$('msgs').innerHTML='<div class="empty" id="empty">
 // ─────────────────────────────────────────────────────────────────────────────
 // CORE: compress + forward
 // ─────────────────────────────────────────────────────────────────────────────
-// Stage 4: structured retrieval (LOG ONLY — not injected into context yet)
 async function handleRequest(req, res, upstreamURL) {
   stats.requests++;
 
@@ -330,6 +347,7 @@ async function handleRequest(req, res, upstreamURL) {
   const body = req.body;
   const messages = body.messages;
   const codeSessionId = Array.isArray(messages) ? deriveSessionId(messages) : 'nosession';
+  let totalCodeSaved = 0;
 
   // Stage 2 + 3: classify intent and route to the matching model
   if (Array.isArray(messages)) {
@@ -339,11 +357,12 @@ async function handleRequest(req, res, upstreamURL) {
     body.model = chosenModel;
   }
 
-  // === Code parsing (Phase 2, LOG-ONLY) — scans ALL user messages for code ===
+  // === Code parsing (Phase 2/2b) — scans ALL user messages for code ===
   if (Array.isArray(messages)) {
     try {
       const sessionId = codeSessionId;
       let codeSavedThisTurn = 0;
+      const latestUserMsg = [...messages].reverse().find(x => x.role === 'user');
       for (const m of messages) {
         if (m.role !== 'user') continue;
         const text = typeof m.content === 'string' ? m.content : '';
@@ -357,12 +376,16 @@ async function handleRequest(req, res, upstreamURL) {
           console.log(`[codestore] functions: ${result.names}`);
 
           // Phase 2b: replace code in OLDER messages only (keep the latest code intact)
-          const isLatestUserMsg = (m === [...messages].reverse().find(x => x.role === 'user'));
+          const isLatestUserMsg = (m === latestUserMsg);
           if (!isLatestUserMsg) {
-            const richRef = buildRichReference(sessionId, result.indexed);
             if (CODE_REPLACE_ENABLED) {
+              const richRef = buildRichReference(sessionId, result.indexed);
+              const origTok = Math.round(detected.code.length / 4);
+              const refTok = Math.round(richRef.length / 4);
+              const saved = Math.max(0, origTok - refTok);
+              codeSavedThisTurn += saved;
               m.content = replaceCodeWithReference(text, detected.code, richRef);
-              console.log(`[codereplace] ✓ replaced code in older message with signature reference (LIVE)`);
+              console.log(`[codereplace] ✓ replaced (saved ${saved} tokens this turn by not re-sending full code)`);
             } else {
               console.log(`[codereplace] would replace older message's code with reference (toggle OFF — log only)`);
             }
@@ -371,12 +394,13 @@ async function handleRequest(req, res, upstreamURL) {
           }
         }
       }
+      totalCodeSaved = codeSavedThisTurn;
     } catch (e) {
       console.log(`[codestore] skipped (${e.message})`);
     }
   }
 
-  // === Code recall (Phase 3, LOG-ONLY) — detects "show me X", logs what it would surface ===
+  // === Code recall (Phase 3b) — detects "show me X", surfaces the stored code ===
   if (Array.isArray(messages)) {
     try {
       const sessionId = codeSessionId;
@@ -466,6 +490,7 @@ async function handleRequest(req, res, upstreamURL) {
   }
 
   if (!Array.isArray(messages) || messages.length === 0) {
+    res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
     return forward(req, res, upstreamURL, body);
   }
 
@@ -480,6 +505,7 @@ async function handleRequest(req, res, upstreamURL) {
     if (!check.ok) {
       console.log(`[preserve] ✗ critical content would be lost — using ORIGINAL. Missing:`,
         JSON.stringify(check.missing));
+      res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
       return forward(req, res, upstreamURL, body);
     }
     console.log(`[preserve] ✓ all critical content intact`);
@@ -487,7 +513,8 @@ async function handleRequest(req, res, upstreamURL) {
 
   if (cStats.skipped) {
     stats.skipped++;
-    console.log(`[CtxCrush] SKIP  ${cStats.reason} | ${messages.length} msgs`);
+    res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
+    console.log(`[CtxCrush] SKIP  ${cStats.reason} | ${messages.length} msgs | code saved ${totalCodeSaved}`);
     return forward(req, res, upstreamURL, body);
   }
 
@@ -498,17 +525,20 @@ async function handleRequest(req, res, upstreamURL) {
   console.log(
     `[CtxCrush] ✓  ${cStats.originalMsgCount}→${cStats.compressedMsgCount} msgs` +
     ` | saved ${cStats.tokensSaved} tokens (${cStats.percentSaved}%)` +
-    ` | ${cStats.compressionType}`
+    ` | ${cStats.compressionType}` +
+    ` | code saved ${totalCodeSaved}`
   );
 
-  res.setHeader('X-CtxCrush-Saved-Tokens',   String(cStats.tokensSaved));
-  res.setHeader('X-CtxCrush-Saved-Pct',      String(cStats.percentSaved));
-  res.setHeader('X-CtxCrush-Original-Msgs',  String(cStats.originalMsgCount));
-  res.setHeader('X-CtxCrush-Compressed-Msgs',String(cStats.compressedMsgCount));
+  res.setHeader('X-CtxCrush-Saved-Tokens',      String(cStats.tokensSaved));
+  res.setHeader('X-CtxCrush-Saved-Pct',         String(cStats.percentSaved));
+  res.setHeader('X-CtxCrush-Original-Msgs',     String(cStats.originalMsgCount));
+  res.setHeader('X-CtxCrush-Compressed-Msgs',   String(cStats.compressedMsgCount));
+  res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
 
   const newBody = { ...body, messages: compressed };
   return forward(req, res, upstreamURL, newBody);
 }
+
 // ── Forward to real upstream (handles both streaming and JSON) ────────────────
 async function forward(req, res, upstreamURL, body) {
   // Build headers — forward auth, content-type, etc.
