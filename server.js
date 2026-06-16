@@ -195,10 +195,9 @@ app.get('/test', (req, res) => {
   </div>
 </aside>
 <main>
-  <div id="savings-banner" style="display:none">
+   <div id="savings-banner" style="display:none">
     <div class="sb-big"><span id="sb-tokens">0</span> tokens saved this session</div>
-    <div class="sb-sub">Without CtxCrush you'd have sent <span id="sb-without">0</span> tokens · with it, only <span id="sb-with">0</span> · that's <span id="sb-pct">0%</span> less</div>
-    <div class="sb-sub" id="sb-breakdown" style="margin-top:3px;color:var(--accent2)"></div>
+    <div class="sb-sub" id="sb-breakdown"></div>
   </div>
   <div class="codebanner">☕ Java code: compressed &amp; recallable to save tokens · other languages in progress</div>
   <div id="msgs">
@@ -260,20 +259,13 @@ function updStats(saved,before,codeSaved){
   $('sr').textContent=ss.reqs;
   $('sp').textContent=(ss.before>0?Math.round(ss.saved/ss.before*100):0)+'%';
   if(total>0){
-    const withTokens=ss.before-ss.saved;
-    const pct=ss.before>0?Math.round(ss.saved/ss.before*100):0;
     $('sb-tokens').textContent=total.toLocaleString();
-    $('sb-without').textContent=ss.before.toLocaleString();
-    $('sb-with').textContent=withTokens.toLocaleString();
-    $('sb-pct').textContent=pct+'%';
     $('savings-banner').style.display='block';
     const bd=$('sb-breakdown');
     if(bd){
-      if(ss.code>0){
-        bd.textContent='Conversation: '+ss.saved.toLocaleString()+' · Code (not re-sending stored code): '+ss.code.toLocaleString();
-      } else {
-        bd.textContent='';
-      }
+      bd.textContent = ss.code>0
+        ? 'Conversation '+ss.saved.toLocaleString()+' · Code '+ss.code.toLocaleString()
+        : '';
     }
   }
 }
