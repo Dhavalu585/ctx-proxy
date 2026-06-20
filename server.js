@@ -574,6 +574,34 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
     res.setHeader('X-CtxCrush-Saved-Tokens', String(stage8SavedTokens));
     console.log(`[Stage 8] total outbound savings this request: ${stage8SavedTokens}tok`);
   }
+  // Stage 9a: Search-back — pull indexed content relevant to the latest question
+  if (Array.isArray(messages) && messages.length > 0) {
+    const latestUser = [...messages].reverse().find(m => m.role === 'user');
+    const queryText = latestUser && typeof latestUser.content === 'string' ? latestUser.content : '';
+
+    // only search if this session actually has indexed content, and the query isn't the placeholder itself
+    if (queryText && queryText !== PLACEHOLDER) {
+      try {
+        const indexed = await store.getContentChunksBySession(sessionId);
+        if (indexed.length > 0) {
+          const hits = await store.searchContent(queryText, 3);
+          // keep only hits from THIS session (same-session scope)
+          const ownHits = hits.filter(h => h.session_id === sessionId);
+          if (ownHits.length > 0) {
+            const block = store.formatSearchResults(ownHits);
+            const injected = { role: 'system', content: block };
+            const last = messages[messages.length - 1];
+            body.messages = [...messages.slice(0, -1), injected, last];
+            console.log(`[Stage 9a] injected ${ownHits.length} indexed chunk(s) for query: "${queryText.slice(0, 60)}"`);
+          } else {
+            console.log(`[Stage 9a] no relevant indexed content for this query`);
+          }
+        }
+      } catch (err) {
+        console.error(`[Stage 9a] search-back failed:`, err.message);
+      }
+    }
+  }
   // ── Compress ───────────────────────────────────────────────────────────────
   const { messages: compressed, stats: cStats } = compressMessages(messages, CFG);
 

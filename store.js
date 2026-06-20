@@ -86,6 +86,14 @@ async function getOrCreateSession(sessionId, userId) {
 
 async function indexContentChunk(sessionId, fragmentId, chunkText, originalTokens, chunkIndex = 0) {
   const chunkSizeTokens = Math.round(chunkText.length / 4);
+  // Skip if this session already indexed this fragment (idempotent across requests)
+  const existing = db.prepare(
+    'SELECT id FROM content_chunks WHERE session_id = ? AND fragment_id = ?'
+  ).get(sessionId, fragmentId);
+  if (existing) {
+    console.log(`[store] fragment ${fragmentId} already indexed (rowid=${existing.id}) — skipping duplicate`);
+    return existing.id;
+  }
   const savings = originalTokens - chunkSizeTokens;
 
   const info = db.prepare(
@@ -110,6 +118,18 @@ async function indexContentChunk(sessionId, fragmentId, chunkText, originalToken
 async function searchContent(query, limit = 5) {
   if (!query || query.trim().length === 0) return [];
 
+  // FTS5 treats punctuation (, ? . etc.) as query operators — strip to safe terms.
+  // Keep words of 3+ chars, drop the rest, OR them together so any term can match.
+  const ftsQuery = query
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')        // punctuation → space
+    .split(/\s+/)
+    .filter(w => w.length >= 3)       // drop tiny words
+    .map(w => `"${w}"`)               // quote each term (extra-safe)
+    .join(' OR ');
+
+  if (!ftsQuery) return [];           // nothing searchable left
+
   const rows = db.prepare(
     `SELECT
        cc.id,
@@ -120,10 +140,10 @@ async function searchContent(query, limit = 5) {
        rank AS relevance_score
      FROM content_fts
      JOIN content_chunks cc ON content_fts.rowid = cc.id
-     WHERE content_fts MATCH ?
+    WHERE content_fts MATCH ?
      ORDER BY rank
      LIMIT ?`
-  ).all(query, limit);
+  ).all(ftsQuery, limit);
 
   if (rows && rows.length > 0) {
     console.log(`[store] ✓ search found ${rows.length} chunks | query="${query}"`);
