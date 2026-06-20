@@ -339,13 +339,8 @@ async function send(){
     const om=parseInt(r.headers.get('X-CtxCrush-Original-Msgs')||'0');
     const cm=parseInt(r.headers.get('X-CtxCrush-Compressed-Msgs')||'0');
     const turnSaved = saved + codeSaved;
-    let badgeLabel=null;
-    if(saved>0 && codeSaved>0) badgeLabel='⚡ '+turnSaved+' tokens saved this turn';
-    else if(saved>0) badgeLabel='⚡ '+saved+' tokens saved ('+pct+'%) · '+om+'→'+cm+' msgs';
-    else if(codeSaved>0) badgeLabel='☕ '+codeSaved+' code tokens saved (not re-sending stored code)';
-    const badge=badgeLabel?{t:'s',l:badgeLabel}:null;
-    addMsg('assistant',reply,badge);hist.push({role:'assistant',content:reply});
-    if(turnSaved>0){updStats(turnSaved)}
+    addMsg('assistant',reply);hist.push({role:'assistant',content:reply});
+    if(turnSaved>0){updStats(turnSaved)}  
   }catch(e){rmTyping();addMsg('system','✗ '+e.message);hist.pop()}
   finally{$('sbtn').disabled=false;inp.focus()}
 }
