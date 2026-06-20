@@ -120,19 +120,67 @@ async function getOrCreateSession(sessionId, userId) {
   });
 }
 
-async function indexContentChunk(sessionId, fragmentId, chunkText, originalTokens) {
-  const chunkSizeTokens = Math.round(chunkText.length / 4);
-  const savings = originalTokens - chunkSizeTokens;
-  console.log(
-    `[store] would index chunk | session=${sessionId} | fragment=${fragmentId} ` +
-    `| original=${originalTokens}tok | stored=${chunkSizeTokens}tok | saves ~${savings}tok`
-  );
-  return null;
+async function indexContentChunk(sessionId, fragmentId, chunkText, originalTokens, chunkIndex = 0) {
+  return new Promise((resolve, reject) => {
+    const chunkSizeTokens = Math.round(chunkText.length / 4);
+    const savings = originalTokens - chunkSizeTokens;
+    
+    db.run(
+      `INSERT INTO content_chunks (session_id, fragment_id, original_size_tokens, chunk_text, chunk_index)
+       VALUES (?, ?, ?, ?, ?)`,
+      [sessionId, fragmentId, originalTokens, chunkText, chunkIndex],
+      function(err) {
+        if (err) {
+          console.error('[store] indexing error:', err.message);
+          return reject(err);
+        }
+        const rowId = this.lastID;
+        console.log(
+          `[store] ✓ indexed chunk ${chunkIndex} | session=${sessionId} | fragment=${fragmentId} ` +
+          `| rowid=${rowId} | original=${originalTokens}tok | stored=${chunkSizeTokens}tok | saves ~${savings}tok`
+        );
+        resolve(rowId);
+      }
+    );
+  });
 }
 
 async function searchContent(query, limit = 5) {
-  console.log(`[store] would search content | query="${query}" | top ${limit} results`);
-  return [];
+  return new Promise((resolve, reject) => {
+    if (!query || query.trim().length === 0) {
+      return resolve([]);
+    }
+    
+    // FTS5 search with BM25 ranking
+    db.all(
+      `SELECT 
+        cc.id, 
+        cc.session_id, 
+        cc.fragment_id, 
+        cc.chunk_text, 
+        cc.chunk_index,
+        rank AS relevance_score
+      FROM content_fts
+      JOIN content_chunks cc ON content_fts.rowid = cc.id
+      WHERE content_fts MATCH ?
+      ORDER BY rank
+      LIMIT ?`,
+      [query, limit],
+      (err, rows) => {
+        if (err) {
+          console.error('[store] search error:', err.message);
+          return reject(err);
+        }
+        if (rows && rows.length > 0) {
+          console.log(`[store] ✓ search found ${rows.length} chunks | query="${query}"`);
+          resolve(rows);
+        } else {
+          console.log(`[store] search found 0 chunks | query="${query}"`);
+          resolve([]);
+        }
+      }
+    );
+  });
 }
 
 async function getContentChunksBySession(sessionId) {
@@ -204,12 +252,21 @@ async function closeStore() {
     }
   });
 }
-
+function formatSearchResults(chunks) {
+  if (!chunks || chunks.length === 0) return null;
+  
+  let formattedText = '[Retrieved from indexed content:]\n\n';
+  chunks.forEach((chunk, idx) => {
+    formattedText += `[Chunk ${idx + 1} from ${chunk.fragment_id}]\n${chunk.chunk_text}\n\n`;
+  });
+  return formattedText;
+}
 module.exports = {
   initStore,
   getOrCreateSession,
-  indexContentChunk,
-  searchContent,
+  indexContentChunk,          // NOW WORKING
+  searchContent,              // NOW WORKING
+  formatSearchResults,        // NEW
   getContentChunksBySession,
   logSessionEvent,
   getSessionEvents,

@@ -77,6 +77,20 @@ app.get('/', (req, res) => {
 });
 
 app.get('/stats', (req, res) => res.json(stats));
+// Stage 8: Search indexed content
+app.post('/search', async (req, res) => {
+  const { query, limit = 5 } = req.body;
+  if (!query) {
+    return res.status(400).json({ error: 'query required' });
+  }
+  try {
+    const results = await store.searchContent(query, limit);
+    const formatted = store.formatSearchResults(results);
+    res.json({ query, count: results.length, results, formatted });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // /test — browser chat UI (no separate file, served inline)
@@ -475,7 +489,7 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
   }
 
   // Stage 5–8 orchestration is now OPT-IN: only runs when the caller sends
-  // the header  X-CtxCrush-Orchestrate: true . Default behaviour = clean
+  // the header X-CtxCrush-Orchestrate: true. Default behaviour = clean
   // compression + routing (with token-savings stats).
   const wantsOrchestration = (req.headers['x-ctxcrush-orchestrate'] || '').toLowerCase() === 'true';
   if (wantsOrchestration && Array.isArray(messages) && req.originalUrl.includes('/groq/')) {
@@ -486,7 +500,6 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
       const fetchFn = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
       const assembled = await assembleIntents(qText, groqKey, fetchFn);
       console.log(`[assembly] method=${assembled.method} | ${assembled.fragments.length} intent(s)`);
-
       if (assembled.isMulti) {
         console.log(formatAssembly(assembled));
         const oldMessages = messages.slice(0, -2);
@@ -534,7 +547,29 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
       console.log(`[retrieval] injected ${retrieved.length} items into context`);
     }
   }
-
+// Stage 8: Check if any fragment is too large to compress — index it instead
+  console.log(`[Stage 8] CHECKING | messages.length=${Array.isArray(messages) ? messages.length : 'NOT-ARRAY'}`);
+  const INDEX_THRESHOLD_TOKENS = 1500;
+  if (Array.isArray(messages)) {
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      const msgTokens = Math.round((msg.content?.length || 0) / 4);
+      console.log(`[Stage 8] msg ${i} | role=${msg.role} | tokens=${msgTokens}`);
+      
+      if (msgTokens > INDEX_THRESHOLD_TOKENS && msg.role === 'user') {
+        const fragmentId = `frag-${i}-${sessionId}-${Date.now()}`;
+        console.log(`[Stage 8] ✓ fragment ${i} is ${msgTokens}tok (> threshold) — indexing`);
+        
+        try {
+          await store.indexContentChunk(sessionId, fragmentId, msg.content, msgTokens);
+          msg.content = '[Large content indexed for retrieval — see /search endpoint]';
+          console.log(`[Stage 8] ✓ indexed as ${fragmentId}`);
+        } catch (err) {
+          console.error(`[Stage 8] indexing failed:`, err.message);
+        }
+      }
+    }
+  }
   if (!Array.isArray(messages) || messages.length === 0) {
     res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
     return forward(req, res, upstreamURL, body);
