@@ -547,34 +547,38 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
       console.log(`[retrieval] injected ${retrieved.length} items into context`);
     }
   }
-// Stage 8: Check if any fragment is too large to compress — index it instead
-  console.log(`[Stage 8] CHECKING | messages.length=${Array.isArray(messages) ? messages.length : 'NOT-ARRAY'}`);
+// Stage 8: Large fragments → index instead of forwarding to the LLM
   const INDEX_THRESHOLD_TOKENS = 1500;
+  const PLACEHOLDER = '[Large content indexed — retrieved on demand]';
+  let stage8SavedTokens = 0;
   if (Array.isArray(messages)) {
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i];
-      const msgTokens = Math.round((msg.content?.length || 0) / 4);
-      console.log(`[Stage 8] msg ${i} | role=${msg.role} | tokens=${msgTokens}`);
-      
+      const content = typeof msg.content === 'string' ? msg.content : '';
+
+      // Skip anything already swapped to a placeholder (don't re-index)
+      if (content === PLACEHOLDER) continue;
+
+      const msgTokens = Math.round(content.length / 4);
       if (msgTokens > INDEX_THRESHOLD_TOKENS && msg.role === 'user') {
-        const fragmentId = `frag-${i}-${sessionId}-${Date.now()}`;
-        console.log(`[Stage 8] ✓ fragment ${i} is ${msgTokens}tok (> threshold) — indexing`);
-        
+        const fragmentId = `frag-${i}-${sessionId}`;
         try {
-          await store.indexContentChunk(sessionId, fragmentId, msg.content, msgTokens);
-          msg.content = '[Large content indexed for retrieval — see /search endpoint]';
-          console.log(`[Stage 8] ✓ indexed as ${fragmentId}`);
+          await store.indexContentChunk(sessionId, fragmentId, content, msgTokens);
+          msg.content = PLACEHOLDER;
+          const placeholderTokens = Math.round(PLACEHOLDER.length / 4);
+          const saved = msgTokens - placeholderTokens;
+          stage8SavedTokens += saved;
+          console.log(`[Stage 8] ✓ fragment ${i}: ${msgTokens}tok → placeholder | saved ${saved}tok from outbound request`);
         } catch (err) {
-          console.error(`[Stage 8] indexing failed:`, err.message);
+          console.error(`[Stage 8] indexing failed for fragment ${i}:`, err.message);
         }
       }
     }
   }
-  if (!Array.isArray(messages) || messages.length === 0) {
-    res.setHeader('X-CtxCrush-Code-Saved-Tokens', String(totalCodeSaved));
-    return forward(req, res, upstreamURL, body);
+  if (stage8SavedTokens > 0) {
+    res.setHeader('X-CtxCrush-Saved-Tokens', String(stage8SavedTokens));
+    console.log(`[Stage 8] total outbound savings this request: ${stage8SavedTokens}tok`);
   }
-
   // ── Compress ───────────────────────────────────────────────────────────────
   const { messages: compressed, stats: cStats } = compressMessages(messages, CFG);
 
