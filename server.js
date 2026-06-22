@@ -13,7 +13,7 @@ const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
-const { detectContentType } = require('./contenttype');
+const { detectContentType, minifyJson } = require('./contenttype');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -474,7 +474,20 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
         if (m.role !== 'user') continue;
         const text = typeof m.content === 'string' ? m.content : '';
         const ctype = detectContentType(text);
-        if (ctype !== 'text') console.log(`[contenttype] detected ${ctype} content (${Math.round(text.length/4)} tok) — routing not yet active`);
+    
+        if (ctype === 'json') {
+          const isLatest = (m === latestUserMsg);
+          const result = minifyJson(text);
+          if (result && result.savedTokens > 0 && !isLatest) {
+            m.content = result.minified;
+            codeSavedThisTurn += result.savedTokens;
+            console.log(`[contenttype] ✓ minified JSON: ${result.beforeTokens}→${result.afterTokens} tok | saved ${result.savedTokens} tok`);
+          } else if (result) {
+            console.log(`[contenttype] JSON detected (${result.beforeTokens} tok) | ${isLatest ? 'kept latest intact' : 'no whitespace to trim'}`);
+          }
+        } else if (ctype === 'logs') {
+          console.log(`[contenttype] detected logs (${Math.round(text.length/4)} tok) — handler coming next step`);
+        }
         const detected = detectJavaCode(text);
         if (detected) {
           const result = await ingestCode(sessionId, detected.code);

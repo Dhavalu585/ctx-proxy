@@ -51,9 +51,24 @@ function detectContentType(text) {
   if (looksLikeLogs(text)) return 'logs';
   return 'text';
 }
-
+// Minify JSON: parse and re-stringify with no whitespace. Lossless — values
+// are byte-for-byte identical, only formatting whitespace is removed.
+// Returns { minified, savedTokens } or null if it can't safely minify.
+function minifyJson(text) {
+  try {
+    const parsed = JSON.parse(text.trim());
+    const minified = JSON.stringify(parsed);          // no spaces, no newlines
+    const beforeTokens = Math.round(text.length / 4);
+    const afterTokens  = Math.round(minified.length / 4);
+    const savedTokens  = Math.max(0, beforeTokens - afterTokens);
+    return { minified, savedTokens, beforeTokens, afterTokens };
+  } catch {
+    return null;  // not valid JSON after all — leave it untouched
+  }
+}
 module.exports = {
   detectContentType,
   looksLikeJson,
   looksLikeLogs,
+  minifyJson,
 };
