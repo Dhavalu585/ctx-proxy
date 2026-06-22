@@ -13,7 +13,7 @@ const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
-const { detectContentType, minifyJson } = require('./contenttype');
+const { detectContentType, minifyJson, compressLogs } = require('./contenttype');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -486,7 +486,15 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
             console.log(`[contenttype] JSON detected (${result.beforeTokens} tok) | ${isLatest ? 'kept latest intact' : 'no whitespace to trim'}`);
           }
         } else if (ctype === 'logs') {
-          console.log(`[contenttype] detected logs (${Math.round(text.length/4)} tok) — handler coming next step`);
+          const isLatest = (m === latestUserMsg);
+          const result = compressLogs(text);
+          if (result && result.savedTokens > 0 && !isLatest) {
+            m.content = result.compressed;
+            codeSavedThisTurn += result.savedTokens;
+            console.log(`[contenttype] ✓ compressed logs: ${result.beforeTokens}→${result.afterTokens} tok | saved ${result.savedTokens} tok`);
+          } else if (result) {
+            console.log(`[contenttype] logs detected (${result.beforeTokens} tok) | ${isLatest ? 'kept latest intact' : 'no repeated lines to collapse'}`);
+          }
         }
         const detected = detectJavaCode(text);
         if (detected) {
@@ -517,6 +525,7 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
         }
       }
       totalCodeSaved = codeSavedThisTurn;
+      if (codeSavedThisTurn > 0) stats.totalSaved += codeSavedThisTurn;
     } catch (e) {
       console.log(`[codestore] skipped (${e.message})`);
     }
