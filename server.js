@@ -55,7 +55,24 @@ const stats = {
 // ── Dollar-savings config (input-side prices per 1M tokens) ──────────────────
 // Token savings are on the INPUT side (trimmed history, parked docs).
 // Traffic is a mix of cheap + large models; we use a blended estimate.
-const BLENDED_PRICE_PER_1M = 0.30;  // midpoint between 8B ($0.05) and 70B ($0.59)
+// ── Model pricing (USD per 1M INPUT tokens; savings are input-side) ──────────
+// Verified mid-2026. Prices drift — re-check provider pages periodically.
+// Ready for multi-provider: add models here, then price per-model later.
+const MODEL_PRICING = {
+  // Groq (current traffic)
+  'llama-3.1-8b-instant':    0.05,
+  'llama-3.3-70b-versatile': 0.59,
+  // OpenAI (via OpenRouter, when used)
+  'gpt-4.1-nano': 0.10,
+  'gpt-4.1-mini': 0.40,
+  'gpt-5.4':      2.50,
+  'gpt-5.5':      5.00,
+};
+
+// Blended rate for the dashboard today. Weighted toward real Groq usage:
+// mostly 70B ($0.59) with some 8B ($0.05) → ~$0.45 is an honest midpoint.
+const BLENDED_PRICE_PER_1M = 0.45;
+const PRICING_VERIFIED = 'mid-2026';
 
 function dollarsSaved(tokens) {
   return (tokens / 1000000) * BLENDED_PRICE_PER_1M;
@@ -356,7 +373,7 @@ async function updStats(turnSaved){
     const r=await fetch(PROXY+'/stats');
     const s=await r.json();
     const total=(s.totalSaved!=null?s.totalSaved:(s.stats?s.stats.totalSaved:0))||0;
-    const dollars=(total/1000000)*0.30;
+    const dollars=(total/1000000)*0.45;
     $('sb-tokens').textContent=total.toLocaleString();
     const d=$('sb-dollars'); if(d) d.textContent=dollars.toFixed(2);
     $('savings-banner').style.display='block';
