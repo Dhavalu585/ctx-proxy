@@ -13,6 +13,7 @@ const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
+const { detectContentType } = require('./contenttype');
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -472,6 +473,8 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
       for (const m of messages) {
         if (m.role !== 'user') continue;
         const text = typeof m.content === 'string' ? m.content : '';
+        const ctype = detectContentType(text);
+        if (ctype !== 'text') console.log(`[contenttype] detected ${ctype} content (${Math.round(text.length/4)} tok) — routing not yet active`);
         const detected = detectJavaCode(text);
         if (detected) {
           const result = await ingestCode(sessionId, detected.code);
