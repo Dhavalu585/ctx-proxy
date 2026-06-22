@@ -66,9 +66,49 @@ function minifyJson(text) {
     return null;  // not valid JSON after all — leave it untouched
   }
 }
+// Compress logs: collapse runs of CONSECUTIVE identical lines into one line
+// with a (×N) count. Error/warn/fatal lines are never collapsed. This is mildly
+// lossy (individual repeat timestamps are dropped) but preserves all signal.
+// Returns { compressed, savedTokens, beforeTokens, afterTokens } or null.
+function compressLogs(text) {
+  try {
+    const lines = text.split('\n');
+    const out = [];
+    const preserve = /\b(ERROR|WARN|WARNING|FATAL)\b/i;
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      // Never collapse error/warn lines — keep them verbatim.
+      if (preserve.test(line)) {
+        out.push(line);
+        i++;
+        continue;
+      }
+      // Count consecutive identical lines.
+      let count = 1;
+      while (i + count < lines.length && lines[i + count] === line) count++;
+      if (count > 1) {
+        out.push(`${line}  (×${count})`);
+      } else {
+        out.push(line);
+      }
+      i += count;
+    }
+
+    const compressed = out.join('\n');
+    const beforeTokens = Math.round(text.length / 4);
+    const afterTokens  = Math.round(compressed.length / 4);
+    const savedTokens  = Math.max(0, beforeTokens - afterTokens);
+    return { compressed, savedTokens, beforeTokens, afterTokens };
+  } catch {
+    return null;
+  }
+}
 module.exports = {
   detectContentType,
   looksLikeJson,
   looksLikeLogs,
   minifyJson,
+  compressLogs,
 };
