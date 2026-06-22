@@ -52,7 +52,14 @@ const stats = {
   requests: 0, compressed: 0, skipped: 0,
   totalSaved: 0, totalBefore: 0
 };
+// ── Dollar-savings config (input-side prices per 1M tokens) ──────────────────
+// Token savings are on the INPUT side (trimmed history, parked docs).
+// Traffic is a mix of cheap + large models; we use a blended estimate.
+const BLENDED_PRICE_PER_1M = 0.30;  // midpoint between 8B ($0.05) and 70B ($0.59)
 
+function dollarsSaved(tokens) {
+  return (tokens / 1000000) * BLENDED_PRICE_PER_1M;
+}
 // ─────────────────────────────────────────────────────────────────────────────
 // HEALTH + STATS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,6 +84,60 @@ app.get('/', (req, res) => {
 });
 
 app.get('/stats', (req, res) => res.json(stats));
+// ── Savings dashboard (live, in-memory) ──────────────────────────────────────
+app.get('/dashboard', (req, res) => {
+  const tokens = stats.totalSaved;
+  const dollars = dollarsSaved(tokens);
+  res.setHeader('Content-Type', 'text/html');
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CtxCrush — Savings Dashboard</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0a0a0c;color:#f4f0ff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+  .wrap{width:100%;max-width:760px}
+  h1{font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:#7c6aff;font-weight:700;margin-bottom:32px;text-align:center}
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:620px){.cards{grid-template-columns:1fr}}
+  .card{background:#141418;border:1px solid #27272f;border-radius:16px;padding:34px 30px}
+  .card .label{font-size:13px;color:#6b6880;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px}
+  .card .value{font-size:46px;font-weight:800;letter-spacing:-.02em;line-height:1}
+  .card.dollars .value{color:#34d399}
+  .card .sub{font-size:13px;color:#6b6880;margin-top:10px}
+  .meta{margin-top:26px;display:flex;gap:26px;justify-content:center;color:#6b6880;font-size:13px}
+  .meta b{color:#f4f0ff;font-weight:600}
+  .foot{text-align:center;margin-top:30px;color:#3a3848;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>CtxCrush — Live Savings</h1>
+  <div class="cards">
+    <div class="card">
+      <div class="label">Tokens saved</div>
+      <div class="value">${tokens.toLocaleString()}</div>
+      <div class="sub">this session</div>
+    </div>
+    <div class="card dollars">
+      <div class="label">Estimated cost saved</div>
+      <div class="value">$${dollars.toFixed(2)}</div>
+      <div class="sub">at ~$${BLENDED_PRICE_PER_1M.toFixed(2)} / 1M tokens (blended estimate)</div>
+    </div>
+  </div>
+  <div class="meta">
+    <span>Requests: <b>${stats.requests.toLocaleString()}</b></span>
+    <span>Compressed: <b>${stats.compressed.toLocaleString()}</b></span>
+    <span>Skipped: <b>${stats.skipped.toLocaleString()}</b></span>
+  </div>
+  <div class="foot">Live in-memory totals · resets on restart · auto-refreshes every 10s</div>
+</div>
+<script>setTimeout(()=>location.reload(),10000)</script>
+</body>
+</html>`);
+});
 // Stage 8: Search indexed content
 app.post('/search', async (req, res) => {
   const { query, limit = 5 } = req.body;
@@ -228,7 +289,8 @@ app.get('/test', (req, res) => {
 </aside>
 <main>
    <div id="savings-banner" style="display:none">
-    <div class="sb-big"><span id="sb-tokens">0</span> tokens saved this session</div>
+    <div class="sb-big"><span id="sb-tokens">0</span> tokens saved</div>
+    <div class="sb-sub" style="font-size:18px;color:#34d399;margin-top:6px">≈ $<span id="sb-dollars">0.00</span> saved <span style="color:#6b6880;font-size:13px">(est. across all usage)</span></div>
   </div>
   <div class="codebanner">☕ Java code: compressed &amp; recallable to save tokens · other languages in progress</div>
   <div id="msgs">
@@ -288,11 +350,18 @@ function addTyping(){
   $('msgs').appendChild(w);$('msgs').scrollTop=$('msgs').scrollHeight;
 }
 function rmTyping(){$('typing')?.remove()}
-function updStats(turnSaved){
-  // turnSaved = the REAL net tokens saved this request (compression + code, already net of any facts cost)
-  ss.total += turnSaved;
-  ss.reqs++;
-  if(ss.total>0){
+async function updStats(turnSaved){
+  // Pull the server-wide total (all traffic) so the banner matches the dashboard
+  try{
+    const r=await fetch(PROXY+'/stats');
+    const s=await r.json();
+    const total=(s.totalSaved!=null?s.totalSaved:(s.stats?s.stats.totalSaved:0))||0;
+    const dollars=(total/1000000)*0.30;
+    $('sb-tokens').textContent=total.toLocaleString();
+    const d=$('sb-dollars'); if(d) d.textContent=dollars.toFixed(2);
+    $('savings-banner').style.display='block';
+  }catch(e){
+    ss.total+=turnSaved;
     $('sb-tokens').textContent=ss.total.toLocaleString();
     $('savings-banner').style.display='block';
   }
@@ -340,7 +409,7 @@ async function send(){
     const cm=parseInt(r.headers.get('X-CtxCrush-Compressed-Msgs')||'0');
     const turnSaved = saved + codeSaved;
     addMsg('assistant',reply);hist.push({role:'assistant',content:reply});
-    if(turnSaved>0){updStats(turnSaved)}  
+    updStats(turnSaved); 
   }catch(e){rmTyping();addMsg('system','✗ '+e.message);hist.pop()}
   finally{$('sbtn').disabled=false;inp.focus()}
 }
@@ -572,6 +641,7 @@ const sessionId = req.headers['x-session-id'] || 'default-session';
   }
   if (stage8SavedTokens > 0) {
     res.setHeader('X-CtxCrush-Saved-Tokens', String(stage8SavedTokens));
+    stats.totalSaved += stage8SavedTokens;
     console.log(`[Stage 8] total outbound savings this request: ${stage8SavedTokens}tok`);
   }
   // Stage 9a: Search-back — pull indexed content relevant to the latest question
