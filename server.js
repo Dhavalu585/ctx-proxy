@@ -455,7 +455,7 @@ async function handleRequest(req, res, upstreamURL) {
   const apiKey = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
   const userId = deriveUserId(apiKey);
   console.log(`[identity] session ${sessionId} → user ${userId}`);
-  await store.getOrCreateSession(sessionId, 'user');
+  await store.getOrCreateSession(sessionId, userId);
   // Allow the client to override the upstream target via header.
   
   // Allow the client to override the upstream target via header.
