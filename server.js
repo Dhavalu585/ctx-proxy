@@ -715,17 +715,20 @@ async function handleRequest(req, res, upstreamURL) {
           const hits = await store.searchContent(queryText, 3);
           const ownHits = hits.filter(h => h.session_id === sessionId);
           const userSessions = userSessionsForGate;
-          // Cross-session preview (log-only): what WOULD a user-scoped search find?
+          // Cross-session: use the user's hits across all their sessions, with
+          // a safety guard — no valid identity falls back to same-session only,
+          // never exposing other users' content.
           const userHits = (userId && userId !== 'anonymous')
             ? hits.filter(h => userSessions.includes(h.session_id))
             : [];
-          console.log(`[cross-session] same-session hits: ${ownHits.length} | user-scoped would be: ${userHits.length} (user ${userId}, ${userSessions.length} session(s))`);
-          if (ownHits.length > 0) {
-            const block = store.formatSearchResults(ownHits);
+          const hitsToInject = (userId && userId !== 'anonymous') ? userHits : ownHits;
+          console.log(`[cross-session] same-session: ${ownHits.length} | user-scoped: ${userHits.length} | injecting: ${hitsToInject.length} (user ${userId}, ${userSessions.length} session(s))`);
+          if (hitsToInject.length > 0) {
+            const block = store.formatSearchResults(hitsToInject);
             const injected = { role: 'system', content: block };
             const last = messages[messages.length - 1];
             body.messages = [...messages.slice(0, -1), injected, last];
-            console.log(`[Stage 9a] injected ${ownHits.length} indexed chunk(s) for query: "${queryText.slice(0, 60)}"`);
+            console.log(`[Stage 9a] injected ${hitsToInject.length} indexed chunk(s) for query: "${queryText.slice(0, 60)}"`);
           } else {
             console.log(`[Stage 9a] no relevant indexed content for this query`);
           }
