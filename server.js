@@ -14,6 +14,15 @@ const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
 const { detectContentType, minifyJson, compressLogs } = require('./contenttype');
+const crypto = require('crypto');
+// ── Identity: derive a stable user id from the API key ───────────────────────
+// SHA-256 hash → first 16 hex chars, prefixed 'u_'. Same key always → same id.
+// We NEVER store or log the raw key — only this non-reversible hash.
+function deriveUserId(apiKey) {
+  if (!apiKey) return 'anonymous';
+  const hash = crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
+  return 'u_' + hash;
+}
 const app  = express();
 const PORT = process.env.PORT || 3000;
 
@@ -442,8 +451,13 @@ function clearChat(){hist=[];ss={total:0,reqs:0};$('sb-tokens').textContent='0';
 // ─────────────────────────────────────────────────────────────────────────────
 async function handleRequest(req, res, upstreamURL) {
   stats.requests++;
-const sessionId = req.headers['x-session-id'] || 'default-session';
+  const sessionId = req.headers['x-session-id'] || 'default-session';
+  const apiKey = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+  const userId = deriveUserId(apiKey);
+  console.log(`[identity] session ${sessionId} → user ${userId}`);
   await store.getOrCreateSession(sessionId, 'user');
+  // Allow the client to override the upstream target via header.
+  
   // Allow the client to override the upstream target via header.
   const override = req.headers['x-upstream-url'];
   if (override) upstreamURL = override;
