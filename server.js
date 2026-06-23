@@ -708,11 +708,18 @@ async function handleRequest(req, res, upstreamURL) {
     // only search if this session actually has indexed content, and the query isn't the placeholder itself
     if (queryText && queryText !== PLACEHOLDER) {
       try {
-        const indexed = await store.getContentChunksBySession(sessionId);
-        if (indexed.length > 0) {
+        const userSessionsForGate = store.getSessionIdsForUser(userId);
+        const userHasContent = userSessionsForGate.length > 0;
+        if (userHasContent) {
+        
           const hits = await store.searchContent(queryText, 3);
-          // keep only hits from THIS session (same-session scope)
           const ownHits = hits.filter(h => h.session_id === sessionId);
+          const userSessions = userSessionsForGate;
+          // Cross-session preview (log-only): what WOULD a user-scoped search find?
+          const userHits = (userId && userId !== 'anonymous')
+            ? hits.filter(h => userSessions.includes(h.session_id))
+            : [];
+          console.log(`[cross-session] same-session hits: ${ownHits.length} | user-scoped would be: ${userHits.length} (user ${userId}, ${userSessions.length} session(s))`);
           if (ownHits.length > 0) {
             const block = store.formatSearchResults(ownHits);
             const injected = { role: 'system', content: block };

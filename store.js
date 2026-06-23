@@ -80,6 +80,14 @@ async function getOrCreateSession(sessionId, userId) {
   return sessionId;
 }
 
+// Return the list of session ids owned by a given user.
+// Used to scope cross-session search safely — only a user's own sessions.
+function getSessionIdsForUser(userId) {
+  if (!userId || userId === 'anonymous') return [];   // safety: no identity → no sessions
+  const rows = db.prepare('SELECT id FROM sessions WHERE user_id = ?').all(userId);
+  return rows.map(r => r.id);
+}
+
 // ─────────────────────────────────────────────────────────────
 // CONTENT INDEXING ("search it later") — Stage 8: LIVE
 // ─────────────────────────────────────────────────────────────
@@ -230,4 +238,5 @@ module.exports = {
   getSessionSnapshot,
   getStoreStats,
   closeStore,
+  getSessionIdsForUser,
 };
