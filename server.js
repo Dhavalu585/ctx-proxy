@@ -464,9 +464,17 @@ async function handleRequest(req, res, upstreamURL) {
 
   // Quick & Cheap mode: caller asked for max savings — skip fact-preservation
   const maxSavings = (req.headers['x-ctxcrush-max-savings'] || '').toLowerCase() === 'true';
+  const conciseMode = (req.headers['x-ctxcrush-concise'] || '').toLowerCase() === 'true';
 
   const body = req.body;
   const messages = body.messages;
+  if (conciseMode && Array.isArray(messages)) {
+    messages.unshift({
+      role: 'system',
+      content: 'Prefer concise responses. Give a complete answer, but avoid unnecessary preamble, restated questions, filler phrases, and over-explanation. Be direct.'
+    });
+    console.log('[concise] gentle brevity instruction injected (opt-in mode on)');
+  }
   const codeSessionId = Array.isArray(messages) ? deriveSessionId(messages) : 'nosession';
   let totalCodeSaved = 0;
   let factsInjection = null;
