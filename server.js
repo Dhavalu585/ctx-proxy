@@ -60,7 +60,8 @@ const CFG = {
 // ── Simple in-memory stats ───────────────────────────────────────────────────
 const stats = {
   requests: 0, compressed: 0, skipped: 0,
-  totalSaved: 0, totalBefore: 0
+  totalSaved: 0, totalBefore: 0,
+  totalOutputTokens: 0
 };
 // ── Dollar-savings config (input-side prices per 1M tokens) ──────────────────
 // Token savings are on the INPUT side (trimmed history, parked docs).
@@ -805,9 +806,58 @@ async function handleRequest(req, res, upstreamURL) {
   const newBody = { ...body, messages: finalMessages };
   return forward(req, res, upstreamURL, newBody);
 }
+// Step 1 (log-only): for non-streaming Groq requests, read the response to
+// capture completion_tokens (real output tokens used), log it, then send the
+// response on. Everything else keeps the blind pipe in forward() untouched.
+async function forwardWithOutputCount(req, res, upstreamURL, body) {
+  const headers = {
+    'Content-Type':  'application/json',
+    'Authorization': req.headers['authorization'] || '',
+  };
 
+  let upstream;
+  try {
+    upstream = await fetch(upstreamURL, {
+      method:  'POST',
+      headers,
+      body:    JSON.stringify(body),
+    });
+  } catch (err) {
+    console.error('[output] upstream fetch error:', err.message);
+    return res.status(502).json({ error: 'Proxy upstream error', detail: err.message });
+  }
+
+  let data;
+  try {
+    data = await upstream.json();
+  } catch (err) {
+    console.error('[output] failed to parse response:', err.message);
+    return res.status(upstream.status).json({ error: 'Could not parse upstream response' });
+  }
+
+  // LOG ONLY: real output tokens used, from the provider's own count.
+  const outputTokens = data?.usage?.completion_tokens;
+  if (typeof outputTokens === 'number') {
+    stats.totalOutputTokens += outputTokens;
+    console.log(`[output] completion_tokens: ${outputTokens} | running total: ${stats.totalOutputTokens}`);
+  } else {
+    console.log(`[output] no completion_tokens in response`);
+  }
+
+  // Send the response on unchanged.
+  res.status(upstream.status).json(data);
+}
 // ── Forward to real upstream (handles both streaming and JSON) ────────────────
-async function forward(req, res, upstreamURL, body) {
+
+  async function forward(req, res, upstreamURL, body) {
+  // Step 1: non-streaming Groq requests go through output-counting path.
+  // Everything else keeps the original blind-pipe below, untouched.
+  const isGroq = upstreamURL.includes('api.groq.com');
+  const isNonStreaming = body.stream !== true;
+  if (isGroq && isNonStreaming) {
+    return forwardWithOutputCount(req, res, upstreamURL, body);
+  }
+  // Build headers — forward auth, content-type, etc.
   // Build headers — forward auth, content-type, etc.
   const headers = {
     'Content-Type':  'application/json',
