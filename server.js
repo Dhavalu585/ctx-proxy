@@ -308,6 +308,10 @@ app.get('/test', (req, res) => {
         <input type="checkbox" id="maxsave" onchange="onModeChange()">
         <span class="modetitle">⚡ Quick &amp; Cheap</span>
       </label>
+      <label class="moderow">
+        <input type="checkbox" id="concise">
+        <span class="modetitle">✂️ Concise replies</span>
+      </label>
       <div class="modenote" id="modenote">
         <b>Smart mode (default):</b> automatically preserves important facts and handles code. Best for work you'll build on.
       </div>
@@ -412,6 +416,7 @@ async function send(){
   const pv=$('prov').value, endpoint=PROVIDERS[pv].path;
   const headers={'Content-Type':'application/json','Authorization':'Bearer '+key};
   if($('maxsave').checked) headers['X-CtxCrush-Max-Savings']='true';
+  if($('concise').checked) headers['X-CtxCrush-Concise']='true';
   if(pv==='custom'){
     const bu=$('baseurl').value.trim();
     if(!bu){addMsg('system','✗ Please enter a Base URL for the custom provider');return}
