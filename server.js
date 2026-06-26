@@ -14,6 +14,10 @@ const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
 const { detectContentType, minifyJson, compressLogs } = require('./contenttype');
+const { extractText } = require('./docextract');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const crypto = require('crypto');
 // ── Identity: derive a stable user id from the API key ───────────────────────
 // SHA-256 hash → first 16 hex chars, prefixed 'u_'. Same key always → same id.
@@ -31,6 +35,55 @@ const PORT = process.env.PORT || 3000;
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+// ── File upload setup (Phase 1: born-digital PDF/DOCX) ───────────────────────
+// In-memory storage so we control exactly where originals get saved.
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },   // 10MB cap — basic safety
+});
+
+// Local folder for original files (Step 2 replaces this with object storage).
+const UPLOAD_DIR = path.join(__dirname, 'uploaded-originals');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+// ── POST /upload — accept a PDF/DOCX, extract text, store original locally ────
+// Phase 1, Step 1: prove "file in → text out". Does NOT yet feed the pipeline.
+app.post('/upload', upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded (send as form field "file")' });
+  }
+
+  const { originalname, buffer, size } = req.file;
+  console.log(`[upload] received: ${originalname} (${size} bytes)`);
+
+  // Extract text
+  const result = await extractText(buffer, originalname);
+  if (!result.ok) {
+    console.log(`[upload] extraction failed: ${result.error}`);
+    return res.status(422).json({ error: result.error, filename: originalname });
+  }
+
+  // Store the original locally (Step 2 → object storage)
+  const safeName = Date.now() + '-' + originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+  const savedPath = path.join(UPLOAD_DIR, safeName);
+  try {
+    fs.writeFileSync(savedPath, buffer);
+  } catch (err) {
+    console.log(`[upload] could not save original: ${err.message}`);
+  }
+
+  const tokenEstimate = Math.round(result.text.length / 4);
+  console.log(`[upload] ✓ extracted ${result.text.length} chars (~${tokenEstimate} tok) from ${result.type}`);
+
+  res.json({
+    filename: originalname,
+    type: result.type,
+    sizeBytes: size,
+    textLength: result.text.length,
+    tokenEstimate,
+    textPreview: result.text.slice(0, 500),   // first 500 chars so we can SEE it worked
+    savedAs: safeName,
+  });
+});
 // Initialize persistent store (Stage 7)
 (async () => {
   try {
