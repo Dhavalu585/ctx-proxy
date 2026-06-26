@@ -404,7 +404,7 @@ app.get('/test', (req, res) => {
     <div class="sb-big"><span id="sb-tokens">0</span> tokens saved</div>
     <div class="sb-sub" style="font-size:18px;color:#34d399;margin-top:6px">≈ $<span id="sb-dollars">0.00</span> saved <span style="color:#6b6880;font-size:13px">(est. across all usage)</span></div>
   </div>
-  <div class="codebanner">☕ Java code: compressed &amp; recallable to save tokens · other languages in progress</div>
+  <div class="codebanner">💻 Code compression in 9 languages (Java, Python, JS, TS, Go, Rust, C++, C#, PHP) — parked &amp; recalled to save tokens</div>
   <div id="msgs">
     <div class="empty" id="empty">
       <div class="ei">⚡</div>
@@ -657,7 +657,7 @@ async function handleRequest(req, res, upstreamURL) {
             console.log(`[codereplace] kept latest code message intact (never replace current code)`);
           }
         }
-      }
+      } 
       totalCodeSaved = codeSavedThisTurn;
       if (codeSavedThisTurn > 0) stats.totalSaved += codeSavedThisTurn;
     } catch (e) {
