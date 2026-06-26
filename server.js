@@ -19,15 +19,16 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-// ── Identity: derive a stable user id from the API key ───────────────────────
-// SHA-256 hash → first 16 hex chars, prefixed 'u_'. Same key always → same id.
-// We NEVER store or log the raw key — only this non-reversible hash.
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+// ── Identity: derive a stable user id from the API key ───
 function deriveUserId(apiKey) {
   if (!apiKey) return 'anonymous';
   const hash = crypto.createHash('sha256').update(apiKey).digest('hex').slice(0, 16);
   return 'u_' + hash;
 }
 const app  = express();
+app.use(helmet({ contentSecurityPolicy: false }));
 const PORT = process.env.PORT || 3000;
 
 
@@ -35,6 +36,20 @@ const PORT = process.env.PORT || 3000;
 // ── Middleware ───────────────────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+const proxyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — please slow down.' },
+});
+app.use('/groq', proxyLimiter);
+app.use('/openai', proxyLimiter);
+app.use('/openrouter', proxyLimiter);
+app.use('/gemini', proxyLimiter);
+app.use('/custom', proxyLimiter);
+app.use('/v1', proxyLimiter);
+app.use('/upload', proxyLimiter);
 // ── File upload setup (Phase 1: born-digital PDF/DOCX) ───────────────────────
 // In-memory storage so we control exactly where originals get saved.
 const upload = multer({
