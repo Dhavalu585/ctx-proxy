@@ -387,6 +387,12 @@ app.get('/test', (req, res) => {
         <input type="checkbox" id="concise">
         <span class="modetitle">✂️ Concise replies</span>
       </label>
+      <div class="field" style="margin-top:12px">
+        <label>Upload Document (PDF/DOCX)</label>
+        <input id="docfile" type="file" accept=".pdf,.docx">
+        <button id="docbtn" onclick="uploadDoc()" style="margin-top:6px;width:100%">Upload &amp; Index</button>
+        <div class="hint" id="docstatus">Extracts text, makes it searchable.</div>
+      </div>
       <div class="modenote" id="modenote">
         <b>Smart mode (default):</b> automatically preserves important facts and handles code. Best for work you'll build on.
       </div>
@@ -471,6 +477,32 @@ async function updStats(turnSaved){
     $('sb-tokens').textContent=ss.total.toLocaleString();
     $('savings-banner').style.display='block';
   }
+}
+  async function uploadDoc(){
+  const key=$('akey').value.trim();
+  if(!key){alert('Please enter your API key first');return}
+  const fileInput=$('docfile');
+  if(!fileInput.files||!fileInput.files[0]){alert('Please choose a PDF or DOCX file');return}
+  const file=fileInput.files[0];
+  const status=$('docstatus');
+  status.textContent='Uploading & extracting...';
+  $('docbtn').disabled=true;
+  try{
+    const fd=new FormData();
+    fd.append('file',file);
+    const r=await fetch(PROXY+'/upload',{method:'POST',headers:{'Authorization':'Bearer '+key},body:fd});
+    const d=await r.json();
+    if(d.indexed){
+      status.textContent='✓ Indexed "'+d.filename+'" ('+d.tokenEstimate+' tok) — now searchable. Ask about it below!';
+    }else if(d.error){
+      status.textContent='✗ '+d.error;
+    }else{
+      status.textContent='Extracted but not indexed (check API key).';
+    }
+  }catch(e){
+    status.textContent='✗ Upload failed: '+e.message;
+  }
+  $('docbtn').disabled=false;
 }
 async function connect(){
   const key=$('akey').value.trim();
