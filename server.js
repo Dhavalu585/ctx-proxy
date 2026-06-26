@@ -12,7 +12,7 @@ const { classifyIntent, modelForIntent } = require('./intent');
 const { retrieveRelevant, formatRetrieved } = require('./retrieval');
 const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
-const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
+const { deriveSessionId, detectCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
 const { detectContentType, minifyJson, compressLogs } = require('./contenttype');
 const { extractText, chunkText } = require('./docextract');
 const multer = require('multer');
@@ -630,13 +630,13 @@ async function handleRequest(req, res, upstreamURL) {
             console.log(`[contenttype] logs detected (${result.beforeTokens} tok) | ${isLatest ? 'kept latest intact' : 'no repeated lines to collapse'}`);
           }
         }
-        const detected = detectJavaCode(text);
+        const detected = detectCode(text);
         if (detected) {
-          const result = await ingestCode(sessionId, detected.code);
+          const result = await ingestCode(sessionId, detected.code, detected.lang);
           const codeTokens = Math.round(detected.code.length / 4);
           const refTokens = Math.round(result.reference.length / 4);
           const pct = codeTokens > 0 ? Math.round((1 - refTokens / codeTokens) * 100) : 0;
-          console.log(`[codestore] session ${sessionId} | detected Java | ${result.indexed} methods indexed | would save ~${pct}% (${codeTokens}→${refTokens} tok)`);
+          console.log(`[codestore] session ${sessionId} | detected ${detected.lang} | ${result.indexed} methods indexed | would save ~${pct}% (${codeTokens}→${refTokens} tok)`);
           console.log(`[codestore] functions: ${result.names}`);
 
           // Phase 2b: replace code in OLDER messages only (keep the latest code intact)

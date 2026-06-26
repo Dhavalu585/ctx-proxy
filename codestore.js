@@ -1,20 +1,16 @@
 'use strict';
 
 /**
- * CtxCrush — Session Code Store (Phase 2/2b/3)
+ * CtxCrush — Session Code Store
  * Holds parsed code functions per session so large code can be replaced with a
- * compact reference (saving tokens) and recalled by name.
- *
- * HONEST LIMITATION: in-memory, session-scoped. Lost on restart, not shared
- * across instances. Fine for first version/demo; persistence needed for prod.
+ * compact reference (saving tokens) and recalled by name. Now multi-language.
  */
 
 const crypto = require('crypto');
-const { parseJava } = require('./codeparse');
+const { parseCode, LANGUAGES } = require('./codeparse');
 
-const store = new Map(); // sessionId -> { functions: Map<name,unit>, lineCount }
+const store = new Map(); // sessionId -> { functions: Map<name,unit>, lineCount, lang }
 
-// Stable session id derived from the FIRST user message
 function deriveSessionId(messages) {
   if (!Array.isArray(messages)) return 'nosession';
   const firstUser = messages.find(m => m.role === 'user');
@@ -24,35 +20,65 @@ function deriveSessionId(messages) {
   return crypto.createHash('sha1').update(seed).digest('hex').slice(0, 10);
 }
 
-// Detect a Java code block in a message's text. Returns {lang, code} or null.
-function detectJavaCode(text) {
+// Map common fence tags / aliases to our registry language keys.
+const FENCE_ALIASES = {
+  js: 'javascript', javascript: 'javascript',
+  ts: 'typescript', typescript: 'typescript',
+  py: 'python', python: 'python',
+  java: 'java', go: 'go', golang: 'go',
+  rust: 'rust', rs: 'rust',
+  cpp: 'cpp', 'c++': 'cpp', cc: 'cpp',
+  cs: 'csharp', csharp: 'csharp', 'c#': 'csharp',
+  php: 'php',
+};
+
+// Detect a supported code block in a message's text. Returns {lang, code} or null.
+// Strategy: prefer the fenced language tag (reliable). Fall back to a light
+// heuristic for untagged blocks (only Java/C-family braces + size).
+function detectCode(text) {
   if (typeof text !== 'string') return null;
-  const fenced = text.match(/```(?:java)?\s*([\s\S]*?)```/i);
+
+  // 1) Fenced block WITH a language tag: ```python ... ```
+  const tagged = text.match(/```([a-zA-Z0-9+#]+)\s*\n([\s\S]*?)```/);
+  if (tagged) {
+    const tag = tagged[1].toLowerCase();
+    const lang = FENCE_ALIASES[tag];
+    if (lang && LANGUAGES[lang]) {
+      const code = tagged[2].trim();
+      if (code.split('\n').length >= 4) return { lang, code };
+    }
+  }
+
+  // 2) Untagged fenced block or raw text: light heuristic (brace-language, size).
+  const fenced = text.match(/```\s*([\s\S]*?)```/);
   const candidate = fenced ? fenced[1] : text;
-  const looksJava = /\b(public|private|protected)\s+(class|void|static|final|double|int|String|boolean)\b/.test(candidate)
-    && candidate.split('\n').length >= 8;
+  if (candidate.split('\n').length < 8) return null;
+  const looksJava = /\b(public|private|protected)\s+(class|void|static|final|double|int|String|boolean)\b/.test(candidate);
   if (looksJava) return { lang: 'java', code: candidate.trim() };
+
   return null;
 }
 
-// Parse + store code for a session; return a compact reference + stats.
-async function ingestCode(sessionId, code) {
-  const units = await parseJava(code);
+// Backward-compatible alias.
+function detectJavaCode(text) { return detectCode(text); }
+
+async function ingestCode(sessionId, code, lang = 'java') {
+  const units = await parseCode(code, lang);
   const methods = units.filter(u => u.type === 'method');
-  if (!store.has(sessionId)) store.set(sessionId, { functions: new Map(), lineCount: 0 });
+  if (!store.has(sessionId)) store.set(sessionId, { functions: new Map(), lineCount: 0, lang });
   const sess = store.get(sessionId);
+  sess.lang = lang;
   for (const u of units) sess.functions.set(u.name.toLowerCase(), u);
   sess.lineCount = code.split('\n').length;
   const names = methods.map(m => m.name).join(', ');
+  const langLabel = lang.charAt(0).toUpperCase() + lang.slice(1);
   return {
-    reference: `[CtxCrush indexed ${methods.length} Java methods from ${sess.lineCount} lines. Functions: ${names}]`,
+    reference: `[CtxCrush indexed ${methods.length} ${langLabel} methods from ${sess.lineCount} lines. Functions: ${names}]`,
     indexed: methods.length,
     names,
   };
 }
 
-// Detect whether a message is asking to recall a stored function.
-// Returns the function name to surface, or null.
 function detectRecallRequest(text, knownNames) {
   if (typeof text !== 'string' || !Array.isArray(knownNames) || !knownNames.length) return null;
   const recallVerb = /\b(show|view|see|pull up|display|recall|what does|how does|explain|method|function|code for)\b/i.test(text);
@@ -76,29 +102,31 @@ function listFunctions(sessionId) {
   return sess ? [...sess.functions.values()] : [];
 }
 
-// Build a signature-rich reference (LLM keeps structural understanding)
 function buildRichReference(sessionId, fallbackCount) {
+  const sess = store.get(sessionId);
   const units = listFunctions(sessionId);
   const cls = units.find(u => u.type === 'class');
   const methods = units.filter(u => u.type === 'method');
+  const lang = sess && sess.lang ? sess.lang : 'code';
+  const langLabel = lang.charAt(0).toUpperCase() + lang.slice(1);
   if (!methods.length) return `[CtxCrush: ${fallbackCount || 0} methods stored, recoverable by name]`;
-  let ref = `[CtxCrush: Java ${cls ? `class ${cls.name}` : 'code'} — ${methods.length} methods stored intact and recoverable:\n`;
+  let ref = `[CtxCrush: ${langLabel} ${cls ? `class ${cls.name}` : 'code'} — ${methods.length} methods stored intact and recoverable:\n`;
   for (const m of methods) ref += `  • ${m.signature || m.name}\n`;
   ref += `Full source preserved; ask to view any method by name.]`;
   return ref;
 }
 
-// Replace a detected code block in message text with the reference
 function replaceCodeWithReference(originalText, codeBlock, reference) {
-  const fencedRe = /```(?:java)?\s*[\s\S]*?```/i;
+  const fencedRe = /```[a-zA-Z0-9+#]*\s*[\s\S]*?```/;
   if (fencedRe.test(originalText)) return originalText.replace(fencedRe, reference);
   return originalText.replace(codeBlock, reference);
 }
-// Phase 3b: build a system message that injects a recalled function's code
-function buildRecallInjection(fn) {
+
+function buildRecallInjection(fn, lang = '') {
   return {
     role: 'system',
-    content: `The developer is asking about the "${fn.name}" method. Here is its full source code (recovered from CtxCrush's code store):\n\`\`\`java\n${fn.code}\n\`\`\`\nUse this exact code to answer their question.`
+    content: `The developer is asking about the "${fn.name}" method. Here is its full source code (recovered from CtxCrush's code store):\n\`\`\`${lang}\n${fn.code}\n\`\`\`\nUse this exact code to answer their question.`
   };
 }
-module.exports = { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection, store };
+
+module.exports = { deriveSessionId, detectCode, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection, store };
