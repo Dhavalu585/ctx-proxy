@@ -1,9 +1,9 @@
+
 // docextract.js - extract text from born-digital PDF and DOCX files.
 // Phase 1: no OCR. Born-digital only - text is already in the file.
 const { PDFParse } = require('pdf-parse');
 const mammoth = require('mammoth');
 
-// Detect file type from the original filename extension.
 function detectFileType(filename) {
   const lower = (filename || '').toLowerCase();
   if (lower.endsWith('.pdf')) return 'pdf';
@@ -11,7 +11,6 @@ function detectFileType(filename) {
   return 'unsupported';
 }
 
-// Extract text from a file buffer. Returns { text, type, ok, error }.
 async function extractText(buffer, filename) {
   const type = detectFileType(filename);
   try {
@@ -29,3 +28,5 @@ async function extractText(buffer, filename) {
     return { text: '', type, ok: false, error: err.message };
   }
 }
+
+module.exports = { detectFileType, extractText };

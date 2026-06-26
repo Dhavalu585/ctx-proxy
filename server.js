@@ -73,10 +73,26 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
   const tokenEstimate = Math.round(result.text.length / 4);
   console.log(`[upload] ✓ extracted ${result.text.length} chars (~${tokenEstimate} tok) from ${result.type}`);
-
+// Step 1b: index the extracted text so the document is searchable/recallable.
+  const apiKey = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+  const userId = deriveUserId(apiKey);
+  const docSessionId = req.headers['x-session-id'] || ('upload-' + userId);
+  let indexed = false;
+  if (userId !== 'anonymous' && result.text.trim().length > 0) {
+    try {
+      await store.getOrCreateSession(docSessionId, userId);
+      const docTokens = Math.round(result.text.length / 4);
+      await store.indexContentChunk(docSessionId, `doc-${safeName}`, result.text, docTokens);
+      indexed = true;
+      console.log(`[upload] ✓ indexed "${originalname}" for ${userId} (${docTokens} tok) — searchable`);
+    } catch (err) {
+      console.log(`[upload] indexing failed: ${err.message}`);
+    }
+  }
   res.json({
     filename: originalname,
     type: result.type,
+    indexed:indexed,
     sizeBytes: size,
     textLength: result.text.length,
     tokenEstimate,
