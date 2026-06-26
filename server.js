@@ -181,7 +181,11 @@ function dollarsSaved(tokens) {
 // HEALTH + STATS
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Landing page — the front door
 app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'landing.html'));
+});
+app.get('/status', (req, res) => {
   res.json({
     name:    'CtxCrush Proxy',
     version: '1.0.0',
@@ -523,7 +527,7 @@ async function connect(){
   const key=$('akey').value.trim();
   if(!key){alert('Please enter your API key first');return}
   try{
-    const r=await fetch(PROXY+'/');
+    const r=await fetch(PROXY+'/status');
     const d=await r.json();
     if(d.status==='running'){
       setConn(true);

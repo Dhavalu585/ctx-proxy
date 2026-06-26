@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CtxCrush — Cut your LLM bill without changing your code</title>
+<style>
+  :root{
+    --bg:#EEF2F8;
+    --bg-2:#E3EAF4;
+    --glass:rgba(255,255,255,.62);
+    --glass-line:rgba(255,255,255,.85);
+    --stroke:rgba(20,40,80,.10);
+    --ink:#0F1B2D;
+    --ink-soft:#46566E;
+    --fog:#7A8AA3;
+    --save:#0FB97A;
+    --save-deep:#0A8F5E;
+    --save-wash:rgba(15,185,122,.10);
+    --blue:#2D6CF6;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code','JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    font-family:var(--sans);color:var(--ink);line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(45,108,246,.10), transparent 60%),
+      radial-gradient(900px 500px at 0% 10%, rgba(15,185,122,.10), transparent 55%),
+      linear-gradient(180deg,var(--bg),var(--bg-2));
+    background-attachment:fixed;min-height:100vh;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  .glass{
+    background:var(--glass);
+    backdrop-filter:blur(18px) saturate(140%);
+    -webkit-backdrop-filter:blur(18px) saturate(140%);
+    border:1px solid var(--glass-line);
+    box-shadow:0 8px 30px rgba(20,40,80,.08),inset 0 1px 0 rgba(255,255,255,.6);
+  }
+  nav{display:flex;align-items:center;justify-content:space-between;
+    max-width:1080px;margin:14px auto 0;padding:14px 22px;border-radius:14px;
+    position:sticky;top:14px;z-index:50}
+  .logo{font-family:var(--mono);font-weight:600;font-size:18px;letter-spacing:-.02em}
+  .logo b{color:var(--save)}
+  .nav-cta{font-family:var(--mono);font-size:13px;color:#fff;
+    background:var(--save);padding:9px 16px;border-radius:8px;text-decoration:none;
+    font-weight:600;transition:transform .15s,box-shadow .15s;
+    box-shadow:0 4px 14px rgba(15,185,122,.35)}
+  .nav-cta:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(15,185,122,.45)}
+  .hero{padding:64px 0 48px}
+  .eyebrow{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--save-deep);
+    letter-spacing:.06em;text-transform:uppercase;margin-bottom:20px;
+    background:var(--save-wash);padding:6px 12px;border-radius:20px}
+  h1{font-size:clamp(34px,5.6vw,62px);line-height:1.03;letter-spacing:-.03em;
+    font-weight:750;max-width:15ch}
+  h1 em{font-style:normal;color:var(--save)}
+  .sub{color:var(--ink-soft);font-size:clamp(16px,2vw,19px);margin-top:22px;max-width:50ch}
+  .hero-actions{display:flex;gap:14px;margin-top:30px;flex-wrap:wrap;align-items:center}
+  .btn{font-family:var(--mono);font-size:14px;font-weight:600;text-decoration:none;
+    padding:13px 22px;border-radius:9px;transition:transform .15s,box-shadow .15s}
+  .btn-pri{background:var(--save);color:#fff;box-shadow:0 6px 18px rgba(15,185,122,.35)}
+  .btn-pri:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(15,185,122,.45)}
+  .btn-sec{color:var(--ink);border:1px solid var(--stroke);background:rgba(255,255,255,.5)}
+  .btn-sec:hover{border-color:var(--fog)}
+  .demo{margin-top:50px;border-radius:18px;padding:0;overflow:hidden}
+  .demo-head{display:flex;align-items:center;gap:8px;padding:14px 20px;
+    border-bottom:1px solid var(--stroke);font-family:var(--mono);font-size:12px;color:var(--fog)}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .demo-body{padding:22px;display:grid;grid-template-columns:1fr;gap:18px}
+  .demo-try label{font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--fog);display:block;margin-bottom:8px}
+  #tryInput{width:100%;min-height:92px;resize:vertical;border-radius:12px;
+    border:1px solid var(--stroke);background:rgba(255,255,255,.7);
+    padding:14px;font-family:var(--mono);font-size:13px;color:var(--ink);line-height:1.6}
+  #tryInput:focus{outline:none;border-color:var(--save);box-shadow:0 0 0 3px var(--save-wash)}
+  .hint{font-family:var(--mono);font-size:11px;color:var(--fog);margin-top:6px;display:flex;justify-content:space-between}
+  .meters{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+  @media(max-width:560px){.meters{grid-template-columns:1fr}}
+  .meter{border-radius:14px;padding:16px;border:1px solid var(--stroke);background:rgba(255,255,255,.55)}
+  .meter .k{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--fog)}
+  .meter .v{font-family:var(--mono);font-size:26px;font-weight:600;margin-top:6px;letter-spacing:-.02em}
+  .meter.before .v{color:#D1556B}
+  .meter.after .v{color:var(--save)}
+  .meter.saved{background:linear-gradient(135deg,var(--save),var(--save-deep));border:none}
+  .meter.saved .k{color:rgba(255,255,255,.8)}
+  .meter.saved .v{color:#fff}
+  .bar{height:8px;border-radius:6px;background:rgba(255,255,255,.35);margin-top:14px;overflow:hidden}
+  .bar > i{display:block;height:100%;width:0;border-radius:6px;background:#fff;transition:width .4s ease}
+  .est{font-family:var(--mono);font-size:11px;color:var(--fog);margin-top:4px;text-align:center}
+  section{padding:64px 0}
+  .sec-eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--save-deep);margin-bottom:14px}
+  h2{font-size:clamp(26px,3.6vw,40px);letter-spacing:-.025em;font-weight:740;max-width:20ch}
+  .sec-sub{color:var(--ink-soft);margin-top:14px;max-width:56ch;font-size:16px}
+  .feats{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:38px}
+  @media(max-width:860px){.feats{grid-template-columns:1fr 1fr}}
+  @media(max-width:560px){.feats{grid-template-columns:1fr}}
+  .feat{border-radius:16px;padding:24px}
+  .feat-roi{font-family:var(--mono);font-size:12.5px;color:var(--save-deep);margin-bottom:12px}
+  .feat h3{font-size:17px;font-weight:680;letter-spacing:-.01em;margin-bottom:8px}
+  .feat p{color:var(--ink-soft);font-size:14px;line-height:1.6}
+  .feat .langs{font-family:var(--mono);font-size:11px;color:var(--fog);margin-top:12px}
+  .privacy{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:34px}
+  @media(max-width:640px){.privacy{grid-template-columns:1fr}}
+  .priv-item{border-radius:14px;padding:22px}
+  .priv-item h4{font-size:15px;font-weight:680;margin-bottom:7px;display:flex;align-items:center;gap:9px}
+  .priv-item h4::before{content:"";width:9px;height:9px;border-radius:50%;background:var(--save);flex:none;box-shadow:0 0 0 4px var(--save-wash)}
+  .priv-item p{color:var(--ink-soft);font-size:14px;line-height:1.6}
+  .cta-box{border-radius:20px;padding:52px 40px;text-align:center;margin-top:8px}
+  .cta-box h2{margin:0 auto}
+  .trial{font-family:var(--mono);font-size:13px;color:var(--save-deep);margin-top:16px}
+  .cta-actions{display:flex;gap:14px;justify-content:center;margin-top:26px;flex-wrap:wrap}
+  .activate{margin-top:20px;font-size:14px;color:var(--ink-soft)}
+  .activate a{color:var(--save-deep);text-decoration:none;font-family:var(--mono);border-bottom:1px solid var(--save)}
+  footer{padding:40px 0;color:var(--fog);font-size:13px;
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+  footer .mono{font-family:var(--mono)}
+  @media(prefers-reduced-motion:no-preference){
+    .reveal{opacity:0;transform:translateY(14px);transition:opacity .6s,transform .6s}
+    .reveal.in{opacity:1;transform:none}
+  }
+</style>
+</head>
+<body>
+
+<nav class="glass">
+  <div class="logo">ctx<b>crush</b></div>
+  <a class="nav-cta" href="#start">Start free trial</a>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="eyebrow">LLM cost proxy · drop-in</div>
+    <h1>Cut your LLM bill <em>without changing your code.</em></h1>
+    <p class="sub">CtxCrush sits between your app and any LLM provider. It remembers your documents and code across the whole conversation, compresses what you send, and trims what comes back — so you pay for far fewer tokens on every call.</p>
+    <div class="hero-actions">
+      <a class="btn btn-pri" href="#start">Start free trial</a>
+      <a class="btn btn-sec" href="#try">Try the savings demo</a>
+    </div>
+
+    <div class="demo glass" id="try">
+      <div class="demo-head">
+        <span class="dot" style="background:#D1556B"></span>
+        <span class="dot" style="background:#F2B45A"></span>
+        <span class="dot" style="background:var(--save)"></span>
+        <span style="margin-left:8px">live savings estimator</span>
+      </div>
+      <div class="demo-body">
+        <div class="demo-try">
+          <label for="tryInput">Paste or type a request (up to 100 words)</label>
+          <textarea id="tryInput" placeholder="e.g. Here is our 40-page vendor contract... [long document text] ... what does the termination clause say?"></textarea>
+          <div class="hint"><span id="wc">0 / 100 words</span><span>tokens ≈ characters ÷ 4</span></div>
+        </div>
+        <div class="meters">
+          <div class="meter before"><div class="k">You send</div><div class="v" id="mBefore">0</div></div>
+          <div class="meter after"><div class="k">CtxCrush forwards</div><div class="v" id="mAfter">0</div></div>
+          <div class="meter saved"><div class="k">Tokens saved</div><div class="v" id="mSaved">0</div>
+            <div class="bar"><i id="bar"></i></div>
+          </div>
+        </div>
+        <div class="est" id="estNote">Estimate only — actual savings depend on repetition, documents, and code in your request.</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <div class="sec-eyebrow">What you save</div>
+    <h2>Outcomes, not overhead.</h2>
+    <p class="sec-sub">Every feature exists for one reason: fewer tokens billed, without you rewriting anything.</p>
+
+    <div class="feats">
+      <div class="feat glass reveal">
+        <div class="feat-roi">→ pay for fewer input tokens</div>
+        <h3>Compress every call</h3>
+        <p>Conversation history, repetitive logs, and verbose JSON are compressed before they reach your provider. You're billed for the lean version, not the bloat.</p>
+      </div>
+      <div class="feat glass reveal">
+        <div class="feat-roi">→ upload once, ask many</div>
+        <h3>Documents that stay cheap</h3>
+        <p>Upload a PDF or Word doc once. Ask all the questions you want — CtxCrush injects only the relevant section each time, instead of re-sending the whole file.</p>
+      </div>
+      <div class="feat glass reveal">
+        <div class="feat-roi">→ remembers &amp; recalls exactly</div>
+        <h3>Stateful code memory</h3>
+        <p>Large code blocks are remembered across the conversation and recalled by name — returned exactly as you wrote them, never altered. Stop re-sending the same functions every turn.</p>
+        <div class="langs">Java · Python · JavaScript · TypeScript · Go · Rust · C++ · C# · PHP</div>
+      </div>
+      <div class="feat glass reveal">
+        <div class="feat-roi">→ cut output tokens too</div>
+        <h3>Concise replies, on demand</h3>
+        <p>Output tokens cost more than input. Flip on concise mode and the model drops preamble and filler — tighter answers where you want them, lower output spend.</p>
+      </div>
+      <div class="feat glass reveal">
+        <div class="feat-roi">→ maximum savings for one-offs</div>
+        <h3>Quick &amp; Cheap mode</h3>
+        <p>For one-shot questions where you don't need full context preserved, Quick &amp; Cheap squeezes the request as hard as possible — ideal for lookups and simple asks.</p>
+      </div>
+      <div class="feat glass reveal">
+        <div class="feat-roi">→ one line of config</div>
+        <h3>Works with any tool</h3>
+        <p>Anything that speaks the OpenAI API format can point at CtxCrush — your app, scripts, or agents. Change the base URL, keep your provider key, start saving.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="sec-eyebrow">Your data</div>
+    <h2>Your keys and content stay yours.</h2>
+    <p class="sec-sub">CtxCrush handles sensitive traffic — your provider keys, prompts, and documents. Here's exactly what happens to them.</p>
+
+    <div class="privacy">
+      <div class="priv-item glass">
+        <h4>Provider keys are never stored</h4>
+        <p>Your API key passes through to your provider and identifies your account only as a one-way hash. The raw key is never written to disk or logs.</p>
+      </div>
+      <div class="priv-item glass">
+        <h4>Never used for marketing or training</h4>
+        <p>Prompts and uploaded documents are processed only to compress and recall them for you. They are not sold, shared, used to train models, or used for any marketing.</p>
+      </div>
+      <div class="priv-item glass">
+        <h4>Indexed for you, isolated to you</h4>
+        <p>Uploaded documents and conversation memory are scoped to your account and searchable only by you. One account's content is never visible to another.</p>
+      </div>
+      <div class="priv-item glass">
+        <h4>Encrypted in transit</h4>
+        <p>All traffic to CtxCrush runs over HTTPS. Your keys and content are encrypted on the wire between your tools and the proxy.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top:24px">
+  <div class="wrap" id="start">
+    <div class="cta-box glass">
+      <h2>Try it free for 5 days.</h2>
+      <p class="trial">// full access · no card required · 5-day trial</p>
+      <div class="cta-actions">
+        <a class="btn btn-pri" href="#start">Create your account</a>
+        <a class="btn btn-sec" href="/test">Open the live tester</a>
+      </div>
+      <p class="activate">After signing up, activate your license by emailing
+        <a href="mailto:hello@ctxcrush.example">hello@ctxcrush.example</a> <span style="color:var(--fog)">(placeholder — your real address goes here)</span>.</p>
+    </div>
+  </div>
+</section>
+
+<footer class="wrap">
+  <span class="mono">ctx<b style="color:var(--save)">crush</b> — LLM cost proxy</span>
+  <span>Pricing coming soon · built for teams already paying for LLMs</span>
+</footer>
+
+<script>
+  const input = document.getElementById('tryInput');
+  const wc = document.getElementById('wc');
+  const mBefore = document.getElementById('mBefore');
+  const mAfter = document.getElementById('mAfter');
+  const mSaved = document.getElementById('mSaved');
+  const bar = document.getElementById('bar');
+  const MAXW = 100;
+
+  function estTokens(s){ return Math.round(s.length / 4); }
+
+  function repetitionFactor(s){
+    const words = s.toLowerCase().match(/\b\w+\b/g) || [];
+    if (words.length < 8) return 0;
+    const uniq = new Set(words).size;
+    const rep = 1 - (uniq / words.length);
+    return Math.min(rep, 0.6);
+  }
+
+  function compute(){
+    let text = input.value;
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    if (words.length > MAXW){
+      text = words.slice(0, MAXW).join(' ');
+      input.value = text;
+    }
+    const n = text.trim() ? text.trim().split(/\s+/).filter(Boolean).length : 0;
+    wc.textContent = n + ' / 100 words';
+
+    const before = estTokens(text);
+    let rate = 0;
+    if (before > 0){
+      const lengthPull = Math.min(before / 600, 0.7);
+      rate = Math.min(0.85, lengthPull + repetitionFactor(text));
+      if (before < 30) rate = rate * 0.3;
+    }
+    const after = Math.max(0, Math.round(before * (1 - rate)));
+    const saved = before - after;
+
+    mBefore.textContent = before.toLocaleString();
+    mAfter.textContent = after.toLocaleString();
+    mSaved.textContent = saved.toLocaleString();
+    bar.style.width = (rate*100).toFixed(0) + '%';
+  }
+  input.addEventListener('input', compute);
+  compute();
+
+  const io=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}})},{threshold:.15});
+  document.querySelectorAll('.reveal').forEach((el,i)=>{el.style.transitionDelay=(i%3*70)+'ms';io.observe(el)});
+</script>
+
+</body>
+</html>
