@@ -14,7 +14,7 @@ const { assembleIntents, formatAssembly } = require('./assembly');
 const { orchestrate, combineResults, mergeResults } = require('./orchestrator');
 const { deriveSessionId, detectJavaCode, ingestCode, recallFunction, listFunctions, detectRecallRequest, buildRichReference, replaceCodeWithReference, buildRecallInjection } = require('./codestore');
 const { detectContentType, minifyJson, compressLogs } = require('./contenttype');
-const { extractText } = require('./docextract');
+const { extractText, chunkText } = require('./docextract');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -39,7 +39,7 @@ app.use(express.json({ limit: '10mb' }));
 // In-memory storage so we control exactly where originals get saved.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 },   // 10MB cap — basic safety
+  limits: { fileSize: 25 * 1024 * 1024 },   // 25MB cap — handles research papers/reports
 });
 
 // Local folder for original files (Step 2 replaces this with object storage).
@@ -81,10 +81,15 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   if (userId !== 'anonymous' && result.text.trim().length > 0) {
     try {
       await store.getOrCreateSession(docSessionId, userId);
-      const docTokens = Math.round(result.text.length / 4);
-      await store.indexContentChunk(docSessionId, `doc-${safeName}`, result.text, docTokens);
+      const chunks = chunkText(result.text);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkTokens = Math.round(chunks[i].length / 4);
+        await store.indexContentChunk(docSessionId, `doc-${safeName}-chunk-${i}`, chunks[i], chunkTokens);
+      }
       indexed = true;
-      console.log(`[upload] ✓ indexed "${originalname}" for ${userId} (${docTokens} tok) — searchable`);
+      console.log(`[upload] split into ${chunks.length} chunk(s) for indexing`);
+      const totalTok = Math.round(result.text.length / 4);
+      console.log(`[upload] ✓ indexed "${originalname}" for ${userId} (${chunks.length} chunk(s), ~${totalTok} tok) — searchable`);
     } catch (err) {
       console.log(`[upload] indexing failed: ${err.message}`);
     }
