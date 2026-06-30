@@ -6,6 +6,8 @@ const { validatePreservation } = require('./validate-preservation');
 const express  = require('express');
 const cors     = require('cors');
 const store = require('./store');
+const { createMcpServer } = require('./mcp-server');
+const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const fetch    = (...a) => import('node-fetch').then(({ default: f }) => f(...a));
 const { compressMessages, estimateTokens } = require('./compressor');
 const { classifyIntent, modelForIntent } = require('./intent');
@@ -1082,7 +1084,30 @@ app.all('/v1/*', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // START
 // ─────────────────────────────────────────────────────────────────────────────
-
+app.post('/mcp', async (req, res) => {
+  try {
+    const mcpServer = createMcpServer(stats);
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on('close', () => { transport.close(); mcpServer.close(); });
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res, req.body);
+  } catch (err) {
+    console.error('[mcp] error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'MCP server error' });
+  }
+});
+app.get('/mcp', async (req, res) => {
+  try {
+    const mcpServer = createMcpServer(stats);
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on('close', () => { transport.close(); mcpServer.close(); });
+    await mcpServer.connect(transport);
+    await transport.handleRequest(req, res);
+  } catch (err) {
+    console.error('[mcp] error:', err.message);
+    if (!res.headersSent) res.status(500).json({ error: 'MCP server error' });
+  }
+});
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`\n⚡ CtxCrush Proxy running on port ${PORT}`);
   console.log(`   OpenAI  →  POST http://localhost:${PORT}/v1/chat/completions`);
