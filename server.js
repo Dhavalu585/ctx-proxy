@@ -52,6 +52,7 @@ app.use('/gemini', proxyLimiter);
 app.use('/custom', proxyLimiter);
 app.use('/v1', proxyLimiter);
 app.use('/upload', proxyLimiter);
+app.use('/mcp', proxyLimiter);
 // ── File upload setup (Phase 1: born-digital PDF/DOCX) ───────────────────────
 // In-memory storage so we control exactly where originals get saved.
 const upload = multer({
