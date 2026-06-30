@@ -14,6 +14,8 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { z } = require('zod');
 const crypto = require('crypto');
 const store = require('./store');
+const { compressMessages } = require('./compressor');
+const { chunkText } = require('./docextract');
 
 // Same identity derivation as server.js — one hash, never the raw key.
 function deriveUserId(apiKey) {
@@ -90,6 +92,73 @@ function createMcpServer(stats) {
 
       const formatted = store.formatSearchResults(myHits);
       return { content: [{ type: 'text', text: formatted }] };
+    }
+  );
+
+  // ── Tool 3: compress_context ─────────────────────────────────────────────
+  server.registerTool(
+    'compress_context',
+    {
+      description: 'Compress a conversation\'s message history using CtxCrush\'s compression pipeline (pruning fillers, trimming old turns). Returns the compressed messages plus before/after token stats.',
+      inputSchema: {
+        messages: z.array(z.object({
+          role: z.string(),
+          content: z.string(),
+        })).describe('The conversation messages to compress, in order.'),
+      },
+    },
+    async ({ messages }) => {
+      const result = compressMessages(messages, {});
+      const before = messages.reduce((sum, m) => sum + Math.round((m.content || '').length / 4), 0);
+      const after = result.messages.reduce((sum, m) => sum + Math.round((typeof m.content === 'string' ? m.content : '').length / 4), 0);
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            compressedMessages: result.messages,
+            stats: result.stats,
+            estimatedTokensBefore: before,
+            estimatedTokensAfter: after,
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ── Tool 4: upload_document ──────────────────────────────────────────────
+  server.registerTool(
+    'upload_document',
+    {
+      description: 'Index a document\'s text so it can be recalled later via recall_document. Splits large documents into chunks automatically. Content is scoped to the caller\'s account only.',
+      inputSchema: {
+        apiKey: z.string().describe('The provider API key used to identify the caller. Never stored — only hashed.'),
+        filename: z.string().describe('A name for this document, e.g. "contract.pdf".'),
+        text: z.string().describe('The extracted text content of the document to index.'),
+      },
+    },
+    async ({ apiKey, filename, text }) => {
+      const userId = deriveUserId(apiKey);
+      if (!userId || userId === 'anonymous') {
+        return {
+          content: [{ type: 'text', text: 'No valid API key provided — cannot index without an identified caller.' }],
+        };
+      }
+      const sessionId = 'mcp-upload-' + userId;
+      await store.getOrCreateSession(sessionId, userId);
+
+      const chunks = chunkText(text);
+      for (let i = 0; i < chunks.length; i++) {
+        const chunkTokens = Math.round(chunks[i].length / 4);
+        await store.indexContentChunk(sessionId, `mcp-doc-${filename}-chunk-${i}`, chunks[i], chunkTokens, i);
+      }
+
+      const totalTok = Math.round(text.length / 4);
+      return {
+        content: [{
+          type: 'text',
+          text: `Indexed "${filename}" — ${chunks.length} chunk(s), ~${totalTok} tokens. Now searchable via recall_document.`,
+        }],
+      };
     }
   );
 
