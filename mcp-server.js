@@ -91,6 +91,27 @@ function createMcpServer(stats) {
       }
 
       const formatted = store.formatSearchResults(myHits);
+
+      // Honest accounting: same pattern as the proxy's Stage 9a fix.
+      // "before" = full original document size per unique doc recalled
+      // (what would have been re-sent without CtxCrush).
+      // "after" = what was actually sent (just the recalled chunks).
+      const seenDocs = new Set();
+      let recallBefore = 0;
+      for (const h of myHits) {
+        const prefixMatch = (h.fragment_id || '').match(/^(.*)-chunk-\d+$/);
+        const docKey = prefixMatch ? prefixMatch[1] : h.fragment_id;
+        if (seenDocs.has(docKey)) continue;
+        seenDocs.add(docKey);
+        recallBefore += store.getDocumentTotalTokens(h.session_id, h.fragment_id);
+      }
+      const recallAfter = myHits.reduce((sum, h) => sum + Math.round((h.chunk_text || '').length / 4), 0);
+      if (recallBefore > recallAfter) {
+        stats.totalBefore += recallBefore;
+        stats.totalSaved += (recallBefore - recallAfter);
+        console.log(`[mcp] recall savings: ${recallBefore} → ${recallAfter} tok (+${recallBefore - recallAfter} saved, ${seenDocs.size} doc(s))`);
+      }
+
       return { content: [{ type: 'text', text: formatted }] };
     }
   );
