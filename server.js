@@ -864,6 +864,7 @@ async function handleRequest(req, res, upstreamURL) {
             ? hits.filter(h => userSessions.includes(h.session_id))
             : [];
           const hitsToInject = (userId && userId !== 'anonymous') ? userHits : ownHits;
+          
           console.log(`[cross-session] same-session: ${ownHits.length} | user-scoped: ${userHits.length} | injecting: ${hitsToInject.length} (user ${userId}, ${userSessions.length} session(s))`);
           if (hitsToInject.length > 0) {
             const block = store.formatSearchResults(hitsToInject);
@@ -871,6 +872,25 @@ async function handleRequest(req, res, upstreamURL) {
             const last = messages[messages.length - 1];
             body.messages = [...messages.slice(0, -1), injected, last];
             console.log(`[Stage 9a] injected ${hitsToInject.length} indexed chunk(s) for query: "${queryText.slice(0, 60)}"`);
+            // Honest accounting: each recalled chunk's ORIGINAL size (real,
+            // known at upload time) is what would have been re-sent without
+            // CtxCrush. Sum that as "before"; what's actually injected
+            // (the chunk content itself) is what's sent now.
+            const seenDocs = new Set();
+            let recallBefore = 0;
+            for (const h of hitsToInject) {
+              const prefixMatch = (h.fragment_id || '').match(/^(.*)-chunk-\d+$/);
+              const docKey = prefixMatch ? prefixMatch[1] : h.fragment_id;
+              if (seenDocs.has(docKey)) continue;
+              seenDocs.add(docKey);
+              recallBefore += store.getDocumentTotalTokens(h.session_id, h.fragment_id);
+            }
+            const recallAfter = hitsToInject.reduce((sum, h) => sum + Math.round((h.chunk_text || '').length / 4), 0);
+            if (recallBefore > recallAfter) {
+              stats.totalBefore += recallBefore;
+              stats.totalSaved += (recallBefore - recallAfter);
+              console.log(`[Stage 9a] recall savings: ${recallBefore} → ${recallAfter} tok (+${recallBefore - recallAfter} saved, ${seenDocs.size} doc(s))`);
+            }
           } else {
             console.log(`[Stage 9a] no relevant indexed content for this query`);
           }

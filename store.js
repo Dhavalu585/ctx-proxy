@@ -145,6 +145,7 @@ async function searchContent(query, limit = 5) {
        cc.fragment_id,
        cc.chunk_text,
        cc.chunk_index,
+       cc.original_size_tokens,
        rank AS relevance_score
      FROM content_fts
      JOIN content_chunks cc ON content_fts.rowid = cc.id
@@ -165,6 +166,20 @@ async function getContentChunksBySession(sessionId) {
   return db.prepare(
     'SELECT id, fragment_id, original_size_tokens, LENGTH(chunk_text) as chunk_bytes FROM content_chunks WHERE session_id = ?'
   ).all(sessionId);
+}
+// Given a chunk's fragment_id (e.g. "doc-123-myfile.pdf-chunk-1"), find all
+// sibling chunks from the SAME original document (same session, same prefix
+// before "-chunk-N") and sum their original_size_tokens. This gives the true
+// full-document size — what would have had to be re-sent if CtxCrush's
+// recall hadn't selectively pulled just the relevant chunk(s).
+function getDocumentTotalTokens(sessionId, fragmentId) {
+  const prefixMatch = fragmentId.match(/^(.*)-chunk-\d+$/);
+  const prefix = prefixMatch ? prefixMatch[1] : fragmentId;
+  const rows = db.prepare(
+    'SELECT original_size_tokens FROM content_chunks WHERE session_id = ? AND fragment_id LIKE ?'
+  ).all(sessionId, prefix + '-chunk-%');
+  if (!rows.length) return 0;
+  return rows.reduce((sum, r) => sum + (r.original_size_tokens || 0), 0);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -233,6 +248,8 @@ module.exports = {
   searchContent,
   formatSearchResults,
   getContentChunksBySession,
+  getContentChunksBySession,
+  getDocumentTotalTokens,
   logSessionEvent,
   getSessionEvents,
   getSessionSnapshot,
